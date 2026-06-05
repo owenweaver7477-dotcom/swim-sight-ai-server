@@ -38,6 +38,34 @@ app = FastAPI(
 
 
 # ─────────────────────────────────────────────────────────────
+# Root status route
+# ─────────────────────────────────────────────────────────────
+# This stops the plain Render URL from showing:
+# {"detail":"Not Found"}
+#
+# Render/browser checks may call GET / or HEAD /.
+# The actual Base44 processing endpoint remains POST /process-video.
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/", status_code=status.HTTP_200_OK)
+def root():
+    return {
+        "status": "ok",
+        "service": "Swim Sight AI Server",
+        "engine": AI_ENGINE_VERSION,
+        "health": "/health",
+        "docs": "/docs",
+        "process_video": "/process-video",
+        "job_status": "/jobs/{job_id}",
+    }
+
+
+@app.head("/", status_code=status.HTTP_200_OK)
+def root_head():
+    return None
+
+
+# ─────────────────────────────────────────────────────────────
 # In-memory job store
 # ─────────────────────────────────────────────────────────────
 # This is good enough for the current Render MVP.
@@ -243,10 +271,6 @@ async def run_analysis_pipeline(
     stage_history: List[Dict[str, Any]] = []
 
     try:
-        # ─────────────────────────────────────────────────────
-        # Stage 1 — Download video from Base44 signed URL
-        # ─────────────────────────────────────────────────────
-
         add_stage(
             stage_history,
             job_id,
@@ -276,10 +300,6 @@ async def run_analysis_pipeline(
                 stage_message="Video download failed",
             )
             return
-
-        # ─────────────────────────────────────────────────────
-        # Stage 2 — Extract sampled frames
-        # ─────────────────────────────────────────────────────
 
         add_stage(
             stage_history,
@@ -322,10 +342,6 @@ async def run_analysis_pipeline(
             },
         )
 
-        # ─────────────────────────────────────────────────────
-        # Stage 3 — Pose estimation
-        # ─────────────────────────────────────────────────────
-
         pose_results = run_pose_estimation(frames)
 
         detected_frames = [
@@ -363,10 +379,6 @@ async def run_analysis_pipeline(
             },
         )
 
-        # ─────────────────────────────────────────────────────
-        # Stage 4 — Stroke analysis rules
-        # ─────────────────────────────────────────────────────
-
         analysis_payload = analyze_pose_data(
             pose_results=pose_results,
             frames=frames,
@@ -376,10 +388,6 @@ async def run_analysis_pipeline(
             camera_angle=request.camera_angle or "Unknown",
             video_upload_id=request.video_upload_id,
         )
-
-        # ─────────────────────────────────────────────────────
-        # Stage 5 — Reliability classification
-        # ─────────────────────────────────────────────────────
 
         analysis_mode = analysis_payload.get("analysis_mode", "placeholder")
         real_pose_detected = bool(analysis_payload.get("real_pose_detected"))
@@ -420,10 +428,6 @@ async def run_analysis_pipeline(
             },
         )
 
-        # ─────────────────────────────────────────────────────
-        # Stage 6 — Enrich callback payload for Base44
-        # ─────────────────────────────────────────────────────
-
         processing_duration = round(time.time() - started_at, 2)
 
         analysis_payload.update({
@@ -458,10 +462,6 @@ async def run_analysis_pipeline(
             95,
             "Sending result back to Base44",
         )
-
-        # ─────────────────────────────────────────────────────
-        # Stage 7 — Callback to Base44
-        # ─────────────────────────────────────────────────────
 
         await send_callback(request.callback_url, analysis_payload)
 
