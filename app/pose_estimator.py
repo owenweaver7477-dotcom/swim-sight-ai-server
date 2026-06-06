@@ -29,23 +29,62 @@ MIN_VISIBILITY = 0.45
 
 
 def run_pose_estimation(frames: list) -> List[Dict[str, Any]]:
-    results = []
+    results: List[Dict[str, Any]] = []
 
-    with mp_pose.Pose(
-        static_image_mode=True,
-        model_complexity=1,
-        enable_segmentation=False,
-        min_detection_confidence=0.45,
-    ) as pose:
-        for original_idx, frame_rgb in frames:
-            frame_result = _process_frame(pose, frame_rgb, original_idx)
-            results.append(frame_result)
+    if not frames:
+        logger.warning("Pose estimation skipped: no frames provided")
+        return results
 
-    detected = sum(1 for r in results if r["pose_detected"])
-    avg_kps = np.mean([r["keypoint_count"] for r in results]) if results else 0
+    logger.info(f"Starting pose estimation on {len(frames)} sampled frames")
+
+    try:
+        with mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=0,
+            enable_segmentation=False,
+            smooth_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as pose:
+            for original_idx, frame_rgb in frames:
+                try:
+                    frame_result = _process_frame(pose, frame_rgb, original_idx)
+                    results.append(frame_result)
+                except Exception as frame_error:
+                    logger.warning(
+                        f"Pose failed on frame {original_idx}: {frame_error}"
+                    )
+                    results.append({
+                        "frame_idx": original_idx,
+                        "pose_detected": False,
+                        "keypoint_count": 0,
+                        "landmarks": {},
+                        "error": "frame_pose_failed",
+                    })
+
+    except Exception as error:
+        logger.exception(f"Pose estimation failed completely: {error}")
+
+        return [
+            {
+                "frame_idx": original_idx,
+                "pose_detected": False,
+                "keypoint_count": 0,
+                "landmarks": {},
+                "error": "pose_estimation_failed",
+            }
+            for original_idx, _frame_rgb in frames
+        ]
+
+    detected = sum(1 for r in results if r.get("pose_detected"))
+    avg_kps = (
+        np.mean([r.get("keypoint_count", 0) for r in results])
+        if results
+        else 0
+    )
 
     logger.info(
-        f"Pose estimation: {detected}/{len(results)} frames detected, "
+        f"Pose estimation complete: {detected}/{len(results)} frames detected, "
         f"avg keypoints={avg_kps:.1f}"
     )
 

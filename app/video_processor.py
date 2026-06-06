@@ -7,8 +7,9 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-MAX_FRAMES = 120
-SAMPLE_INTERVAL_SECONDS = 0.25
+MAX_FRAMES = 20
+SAMPLE_INTERVAL_SECONDS = 0.5
+MAX_FRAME_WIDTH = 640
 
 
 async def download_video(video_upload_id: str, signed_url: str) -> Optional[str]:
@@ -50,6 +51,7 @@ def extract_frames(video_path: str) -> Tuple[list, float, float]:
     frame_indices = list(range(0, total_frames, sample_every_n))[:MAX_FRAMES]
 
     frames = []
+    logged_resize = False
 
     for idx in frame_indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -58,6 +60,29 @@ def extract_frames(video_path: str) -> Tuple[list, float, float]:
         if not ret:
             continue
 
+        original_height, original_width = frame.shape[:2]
+
+        if original_width > MAX_FRAME_WIDTH:
+            scale = MAX_FRAME_WIDTH / original_width
+            new_width = MAX_FRAME_WIDTH
+            new_height = int(original_height * scale)
+
+            frame = cv2.resize(
+                frame,
+                (new_width, new_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            new_width = original_width
+            new_height = original_height
+
+        if not logged_resize:
+            logger.info(
+                f"Frame resize: original={original_width}x{original_height}, "
+                f"processed={new_width}x{new_height}, max_width={MAX_FRAME_WIDTH}"
+            )
+            logged_resize = True
+
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frames.append((idx, frame_rgb))
 
@@ -65,7 +90,8 @@ def extract_frames(video_path: str) -> Tuple[list, float, float]:
 
     logger.info(
         f"Extracted {len(frames)}/{len(frame_indices)} frames "
-        f"(fps={fps:.1f}, duration={total_duration:.1f}s)"
+        f"(fps={fps:.1f}, duration={total_duration:.1f}s, "
+        f"sample_interval={SAMPLE_INTERVAL_SECONDS}s, max_frames={MAX_FRAMES})"
     )
 
     return frames, fps, total_duration
