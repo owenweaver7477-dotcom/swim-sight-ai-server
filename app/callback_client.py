@@ -1,37 +1,85 @@
-import httpx
 import os
 import logging
-from typing import Dict, Any
+from typing import Any, Dict, Optional
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
+CALLBACK_TIMEOUT_SECONDS = 30.0
 
-async def send_callback(callback_url: str, payload: Dict[str, Any]):
-    ai_webhook_secret = os.getenv("AI_WEBHOOK_SECRET", "")
 
-    if not ai_webhook_secret:
-        logger.error("AI_WEBHOOK_SECRET is not set. Callback will likely be rejected.")
+def _safe_payload_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Log useful callback info without exposing signed URLs or private paths."""
+    return {
+        "video_upload_id": payload.get("video_upload_id"),
+        "job_id": payload.get("job_id"),
+        "status": payload.get("status"),
+        "analysis_mode": payload.get("analysis_mode"),
+        "real_pose_detected": payload.get("real_pose_detected"),
+        "pose_reliability": payload.get("pose_reliability"),
+        "finding_count": len(payload.get("findings") or []),
+        "quality_flags": payload.get("quality_flags") or [],
+        "recommended_next_action": payload.get("recommended_next_action"),
+    }
+
+
+async def send_callback(
+    callback_url: str,
+    payload: Dict[str, Any],
+    request_id: Optional[str] = None,
+) -> bool:
+    """
+    Send AI result callback to Vercel.
+
+    Required by Vercel callback route:
+    - x-ai-webhook-secret: <AI_WEBHOOK_SECRET>
+    """
+    if not callback_url:
+        logger.error("Callback skipped: missing callback_url")
+        return False
+
+    secret = os.getenv("AI_WEBHOOK_SECRET")
+    if not secret:
+        logger.error("Callback skipped: AI_WEBHOOK_SECRET is not set on Render")
+        return False
 
     headers = {
         "Content-Type": "application/json",
-        "X-AI-WEBHOOK-SECRET": ai_webhook_secret,
+        "x-ai-webhook-secret": secret,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(callback_url, json=payload, headers=headers)
+    if request_id:
+        headers["x-request-id"] = request_id
 
-        if response.status_code in (200, 201, 202):
+    safe_summary = _safe_payload_summary(payload)
+    logger.info(f"Sending AI callback: {safe_summary}")
+
+    try:
+        async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                callback_url,
+                json=payload,
+                headers=headers,
+            )
+
+        if 200 <= response.status_code < 300:
             logger.info(
-                f"[{payload.get('video_upload_id')}] Callback accepted: HTTP {response.status_code}"
+                f"Callback accepted: HTTP {response.status_code}, "
+                f"job_id={payload.get('job_id')}, video_upload_id={payload.get('video_upload_id')}"
             )
-        else:
-            logger.error(
-                f"[{payload.get('video_upload_id')}] Callback rejected: "
-                f"HTTP {response.status_code} — {response.text[:500]}"
-            )
+            return True
+
+        logger.error(
+            f"Callback rejected: HTTP {response.status_code}, "
+            f"body={response.text[:500]}, summary={safe_summary}"
+        )
+        return False
 
     except httpx.TimeoutException:
-        logger.error(f"[{payload.get('video_upload_id')}] Callback timed out")
-    except Exception as e:
-        logger.error(f"[{payload.get('video_upload_id')}] Callback error: {e}")
+        logger.error(f"Callback timed out after {CALLBACK_TIMEOUT_SECONDS}s: {safe_summary}")
+        return False
+
+    except Exception as error:
+        logger.exception(f"Callback failed: {error}, summary={safe_summary}")
+        return False

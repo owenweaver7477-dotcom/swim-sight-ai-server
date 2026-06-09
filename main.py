@@ -1,11 +1,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
 import uuid
 import time
 import logging
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, status
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 # FastAPI app
 # ─────────────────────────────────────────────────────────────
 
-AI_ENGINE_VERSION = "pose-mvp-0.2"
+AI_ENGINE_VERSION = "pose-mvp-0.3"
 
 app = FastAPI(
     title="Swim Sight AI Server",
@@ -38,13 +39,7 @@ app = FastAPI(
 
 
 # ─────────────────────────────────────────────────────────────
-# Root status route
-# ─────────────────────────────────────────────────────────────
-# This stops the plain Render URL from showing:
-# {"detail":"Not Found"}
-#
-# Render/browser checks may call GET / or HEAD /.
-# The actual Base44 processing endpoint remains POST /process-video.
+# Root / health
 # ─────────────────────────────────────────────────────────────
 
 @app.get("/", status_code=status.HTTP_200_OK)
@@ -65,34 +60,54 @@ def root_head():
     return None
 
 
+@app.get("/health", response_model=HealthResponse, status_code=status.HTTP_200_OK)
+def health_check():
+    return HealthResponse(status="ok", engine=AI_ENGINE_VERSION)
+
+
 # ─────────────────────────────────────────────────────────────
 # In-memory job store
 # ─────────────────────────────────────────────────────────────
-# This is good enough for the current Render MVP.
-#
-# Important:
-# - Jobs are stored in memory.
-# - If Render restarts, this store resets.
-# - Base44 still remains the source of truth through AIProcessingJob.
-#
-# Future upgrade:
-# Replace this with Redis/Celery/Postgres if you need persistent job tracking.
+# This is only a Render-side convenience store.
+# Supabase/Vercel remains the source of truth.
+# If Render restarts, this resets.
 # ─────────────────────────────────────────────────────────────
 
 JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 def now_iso() -> str:
-    """Return UTC timestamp in ISO format for Base44/debug logs."""
     return datetime.utcnow().isoformat() + "Z"
 
 
-def create_job(video_upload_id: str) -> str:
-    """Create a Python-side job record and return job_id."""
-    job_id = str(uuid.uuid4())
+def safe_request_summary(request: VideoProcessingRequest) -> Dict[str, Any]:
+    """Safe log summary. Never log signed_video_url."""
+    return {
+        "video_upload_id": getattr(request, "video_upload_id", None),
+        "stroke_type": getattr(request, "stroke_type", None),
+        "camera_angle": getattr(request, "camera_angle", None),
+        "callback_url_present": bool(getattr(request, "callback_url", None)),
+        "signed_video_url_present": bool(getattr(request, "signed_video_url", None)),
+    }
 
+
+def get_or_create_job_id(request: VideoProcessingRequest) -> str:
+    """
+    Prefer the Vercel/Supabase job id if the trigger route sends one.
+    Fall back to Python-side UUID for backwards compatibility.
+    """
+    incoming_job_id = getattr(request, "job_id", None)
+
+    if incoming_job_id:
+        return str(incoming_job_id)
+
+    return str(uuid.uuid4())
+
+
+def create_job(job_id: str, video_upload_id: str) -> None:
     JOBS[job_id] = {
         "job_id": job_id,
+        "server_job_id": job_id,
         "video_upload_id": video_upload_id,
         "status": "queued",
         "stage": "queued",
@@ -102,8 +117,6 @@ def create_job(video_upload_id: str) -> str:
         "updated_at": now_iso(),
     }
 
-    return job_id
-
 
 def update_job(
     job_id: str,
@@ -111,16 +124,14 @@ def update_job(
     stage: str,
     progress_percent: int,
     message: str,
-    extra: Dict[str, Any] | None = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """
-    Update Python-side job state.
-
-    Base44 can poll GET /jobs/{job_id} in future.
-    Current Base44 mostly relies on callback, but this makes the server production-ready.
-    """
     if job_id not in JOBS:
-        JOBS[job_id] = {"job_id": job_id}
+        JOBS[job_id] = {
+            "job_id": job_id,
+            "server_job_id": job_id,
+            "created_at": now_iso(),
+        }
 
     payload = {
         "status": status_value,
@@ -148,13 +159,8 @@ def add_stage(
     stage: str,
     progress_percent: int,
     message: str,
-    extra: Dict[str, Any] | None = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """
-    Record a stage both in memory and in the callback payload.
-
-    Base44 stores this on AIProcessingJob so the app can show a real timeline.
-    """
     stage_entry = {
         "stage": stage,
         "status": status_value,
@@ -178,27 +184,8 @@ def add_stage(
     )
 
 
-# ─────────────────────────────────────────────────────────────
-# Health / job status endpoints
-# ─────────────────────────────────────────────────────────────
-
-@app.get("/health", response_model=HealthResponse, status_code=status.HTTP_200_OK)
-def health_check():
-    """
-    Render health check.
-
-    Base44 does not need this for analysis, but Render uses it to confirm the server is live.
-    """
-    return HealthResponse(status="ok", engine=AI_ENGINE_VERSION)
-
-
 @app.get("/jobs/{job_id}", status_code=status.HTTP_200_OK)
 def get_job(job_id: str):
-    """
-    Optional status endpoint.
-
-    Base44 can use this later to poll job stage/progress while processing.
-    """
     job = JOBS.get(job_id)
 
     if not job:
@@ -208,7 +195,7 @@ def get_job(job_id: str):
 
 
 # ─────────────────────────────────────────────────────────────
-# Main Base44 entrypoint
+# Main Vercel entrypoint
 # ─────────────────────────────────────────────────────────────
 
 @app.post("/process-video", status_code=status.HTTP_202_ACCEPTED)
@@ -217,27 +204,26 @@ async def process_video(
     background_tasks: BackgroundTasks,
 ):
     """
-    Base44 calls this endpoint from triggerPoseAnalysis.
+    Vercel calls this endpoint from /api/ai/trigger.
 
-    New Phase 9C behaviour:
-    - accept immediately
-    - return job_id immediately
-    - process in background
-    - callback to Base44 when done
-
-    Base44 expects this response shape:
-    {
-      "accepted": true,
-      "job_id": "...",
-      "video_upload_id": "...",
-      "status": "queued"
-    }
+    This endpoint must accept quickly so Vercel does not time out.
+    Heavy processing happens in the background.
     """
-    job_id = create_job(request.video_upload_id)
+    if not request.video_upload_id:
+        raise HTTPException(status_code=400, detail="Missing video_upload_id")
+
+    if not request.signed_video_url:
+        raise HTTPException(status_code=400, detail="Missing signed_video_url")
+
+    if not request.callback_url:
+        raise HTTPException(status_code=400, detail="Missing callback_url")
+
+    job_id = get_or_create_job_id(request)
+    create_job(job_id=job_id, video_upload_id=request.video_upload_id)
 
     logger.info(
-        f"[{request.video_upload_id}] Accepted AI job {job_id} — "
-        f"stroke={request.stroke_type}, camera_angle={request.camera_angle}"
+        f"[{request.video_upload_id}] Accepted AI job {job_id}: "
+        f"{safe_request_summary(request)}"
     )
 
     background_tasks.add_task(run_analysis_pipeline, request, job_id)
@@ -245,8 +231,11 @@ async def process_video(
     return {
         "accepted": True,
         "job_id": job_id,
+        "server_job_id": job_id,
         "video_upload_id": request.video_upload_id,
         "status": "queued",
+        "stage": "queued",
+        "engine": AI_ENGINE_VERSION,
     }
 
 
@@ -258,14 +247,6 @@ async def run_analysis_pipeline(
     request: VideoProcessingRequest,
     job_id: str,
 ):
-    """
-    Full AI processing pipeline.
-
-    Important:
-    - This must never create fake findings.
-    - If pose detection is weak, return placeholder/unreliable with zero findings.
-    - Coach approval in Base44 remains required.
-    """
     video_path = None
     started_at = time.time()
     stage_history: List[Dict[str, Any]] = []
@@ -277,11 +258,12 @@ async def run_analysis_pipeline(
             "running",
             "downloading_video",
             10,
-            "Downloading video securely from Base44 storage",
+            "Downloading video securely from private storage",
             {
                 "video_upload_id": request.video_upload_id,
                 "stroke_type": request.stroke_type,
                 "camera_angle": request.camera_angle,
+                "engine": AI_ENGINE_VERSION,
             },
         )
 
@@ -298,6 +280,7 @@ async def run_analysis_pipeline(
                 started_at=started_at,
                 error_message="Failed to download video from signed URL.",
                 stage_message="Video download failed",
+                quality_flags=["signed_url_download_failed"],
             )
             return
 
@@ -320,12 +303,13 @@ async def run_analysis_pipeline(
                 started_at=started_at,
                 error_message="Could not extract frames from video file.",
                 stage_message="Frame extraction failed",
+                quality_flags=["frame_extraction_failed"],
             )
             return
 
         logger.info(
             f"[{request.video_upload_id}] Extracted {len(frames)} sampled frames "
-            f"at fps={fps:.2f}, duration={total_duration:.2f}s"
+            f"fps={fps:.2f}, duration={total_duration:.2f}s"
         )
 
         add_stage(
@@ -344,20 +328,17 @@ async def run_analysis_pipeline(
 
         pose_results = run_pose_estimation(frames)
 
-        detected_frames = [
-            result for result in pose_results
-            if result.get("pose_detected")
-        ]
-
         frame_count_processed = len(pose_results)
+        detected_frames = [r for r in pose_results if r.get("pose_detected")]
         detected_count = len(detected_frames)
+
         detection_ratio = (
             detected_count / frame_count_processed
             if frame_count_processed > 0
-            else 0
+            else 0.0
         )
 
-        detected_keypoints_count = 0
+        detected_keypoints_count = 0.0
         if detected_frames:
             detected_keypoints_count = round(
                 sum(r.get("keypoint_count", 0) for r in detected_frames)
@@ -371,7 +352,7 @@ async def run_analysis_pipeline(
             "running",
             "analysing_stroke",
             75,
-            f"Running {request.stroke_type} stroke-specific checks",
+            f"Running {request.stroke_type or 'swim'} stroke-specific checks",
             {
                 "detected_pose_frames": detected_count,
                 "detection_ratio": round(detection_ratio, 3),
@@ -397,13 +378,15 @@ async def run_analysis_pipeline(
             real_pose_detected=real_pose_detected,
             detection_ratio=detection_ratio,
             detected_keypoints_count=detected_keypoints_count,
+            frame_count_processed=frame_count_processed,
         )
 
         quality_flags = build_quality_flags(
             detection_ratio=detection_ratio,
             detected_keypoints_count=detected_keypoints_count,
+            frame_count_processed=frame_count_processed,
+            total_duration=total_duration,
             camera_angle=request.camera_angle or "",
-            signed_video_url=request.signed_video_url or "",
         )
 
         recommended_next_action = get_recommended_next_action(
@@ -412,26 +395,38 @@ async def run_analysis_pipeline(
             quality_flags=quality_flags,
         )
 
-        add_stage(
-            stage_history,
-            job_id,
-            "running",
-            "generating_outputs",
-            88,
-            "Preparing AI review result for Base44",
-            {
-                "analysis_mode": analysis_mode,
-                "real_pose_detected": real_pose_detected,
-                "pose_reliability": pose_reliability,
-                "quality_flags": quality_flags,
-                "recommended_next_action": recommended_next_action,
-            },
+        should_allow_ai_findings = can_emit_ai_findings(
+            analysis_mode=analysis_mode,
+            real_pose_detected=real_pose_detected,
+            pose_reliability=pose_reliability,
+            detection_ratio=detection_ratio,
+            detected_keypoints_count=detected_keypoints_count,
+            findings=analysis_payload.get("findings") or [],
         )
+
+        if not should_allow_ai_findings:
+            logger.info(
+                f"[{request.video_upload_id}] AI findings suppressed: "
+                f"mode={analysis_mode}, real_pose={real_pose_detected}, "
+                f"reliability={pose_reliability}, ratio={detection_ratio:.3f}, "
+                f"kps={detected_keypoints_count}"
+            )
+
+            analysis_payload["analysis_mode"] = "manual_review"
+            analysis_payload["real_pose_detected"] = False
+            analysis_payload["findings"] = []
+            analysis_payload["overall_score"] = None
+            analysis_payload["phase_breakdown"] = {}
+            analysis_payload["drag_analysis"] = []
+            recommended_next_action = "manual_review_recommended"
 
         processing_duration = round(time.time() - started_at, 2)
 
         analysis_payload.update({
             "job_id": job_id,
+            "server_job_id": job_id,
+            "video_upload_id": request.video_upload_id,
+            "engine": AI_ENGINE_VERSION,
             "stage_history": stage_history,
             "processing_duration_seconds": processing_duration,
             "video_duration_seconds": round(total_duration, 2),
@@ -441,18 +436,26 @@ async def run_analysis_pipeline(
             "quality_flags": quality_flags,
             "recommended_next_action": recommended_next_action,
             "frame_count_processed": frame_count_processed,
+            "detected_pose_frames": detected_count,
             "detected_keypoints_count": detected_keypoints_count,
         })
 
-        # Extra safety:
-        # If not real_pose, never allow fake findings / scores / drag analysis through.
-        if analysis_mode != "real_pose" or not real_pose_detected:
-            analysis_payload["analysis_mode"] = "placeholder"
-            analysis_payload["real_pose_detected"] = False
-            analysis_payload["findings"] = []
-            analysis_payload["overall_score"] = None
-            analysis_payload["phase_breakdown"] = {}
-            analysis_payload["drag_analysis"] = []
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "generating_outputs",
+            88,
+            "Preparing coach-review result",
+            {
+                "analysis_mode": analysis_payload.get("analysis_mode"),
+                "real_pose_detected": analysis_payload.get("real_pose_detected"),
+                "pose_reliability": pose_reliability,
+                "quality_flags": quality_flags,
+                "recommended_next_action": recommended_next_action,
+                "finding_count": len(analysis_payload.get("findings") or []),
+            },
+        )
 
         add_stage(
             stage_history,
@@ -460,21 +463,27 @@ async def run_analysis_pipeline(
             "running",
             "callback_sending",
             95,
-            "Sending result back to Base44",
+            "Sending result back to Swim Sight 3D",
         )
 
-        await send_callback(request.callback_url, analysis_payload)
+        callback_ok = await send_callback(request.callback_url, analysis_payload)
 
         final_status = (
             "completed"
             if analysis_payload.get("analysis_mode") == "real_pose"
-            else "unreliable_pose"
+            and analysis_payload.get("real_pose_detected")
+            else "manual_review_recommended"
         )
+
+        if not callback_ok:
+            final_status = "callback_failed"
 
         final_message = (
             "AI review ready for coach approval"
             if final_status == "completed"
-            else "Pose unreliable — manual review recommended"
+            else "Manual review recommended"
+            if final_status == "manual_review_recommended"
+            else "Callback failed"
         )
 
         add_stage(
@@ -485,17 +494,18 @@ async def run_analysis_pipeline(
             100,
             final_message,
             {
-                "callback_sent": True,
+                "callback_sent": callback_ok,
                 "processing_duration_seconds": processing_duration,
             },
         )
 
         logger.info(
-            f"[{request.video_upload_id}] Callback sent — "
-            f"job_id={job_id}, mode={analysis_payload.get('analysis_mode')}, "
-            f"real_pose_detected={analysis_payload.get('real_pose_detected')}, "
-            f"findings={len(analysis_payload.get('findings', []))}, "
-            f"duration={processing_duration}s"
+            f"[{request.video_upload_id}] Processing finished: "
+            f"job_id={job_id}, status={final_status}, "
+            f"mode={analysis_payload.get('analysis_mode')}, "
+            f"real_pose={analysis_payload.get('real_pose_detected')}, "
+            f"findings={len(analysis_payload.get('findings') or [])}, "
+            f"callback_ok={callback_ok}, duration={processing_duration}s"
         )
 
     except Exception as error:
@@ -508,6 +518,7 @@ async def run_analysis_pipeline(
             started_at=started_at,
             error_message=f"Internal processing error: {str(error)}",
             stage_message="Internal processing error",
+            quality_flags=["processing_error"],
         )
 
     finally:
@@ -526,13 +537,10 @@ async def send_error_result(
     started_at: float,
     error_message: str,
     stage_message: str,
+    quality_flags: Optional[List[str]] = None,
 ):
-    """
-    Send safe error callback to Base44.
-
-    This ensures the app does not remain stuck in processing forever.
-    """
     processing_duration = round(time.time() - started_at, 2)
+    flags = quality_flags or ["processing_error"]
 
     add_stage(
         stage_history,
@@ -544,6 +552,7 @@ async def send_error_result(
         {
             "error_message": error_message,
             "processing_duration_seconds": processing_duration,
+            "quality_flags": flags,
         },
     )
 
@@ -554,38 +563,67 @@ async def send_error_result(
 
     error_payload.update({
         "job_id": job_id,
+        "server_job_id": job_id,
+        "video_upload_id": request.video_upload_id,
+        "engine": AI_ENGINE_VERSION,
+        "status": "error",
+        "analysis_mode": "manual_review",
+        "real_pose_detected": False,
+        "findings": [],
+        "overall_score": None,
+        "phase_breakdown": {},
+        "drag_analysis": [],
         "stage_history": stage_history,
         "processing_duration_seconds": processing_duration,
         "pose_reliability": "failed",
-        "quality_flags": ["processing_error"],
+        "quality_flags": flags,
         "recommended_next_action": "manual_review_recommended",
         "detection_ratio": 0,
     })
 
-    try:
-        await send_callback(request.callback_url, error_payload)
-    except Exception:
-        logger.exception(f"[{request.video_upload_id}] Error callback failed")
+    callback_ok = await send_callback(request.callback_url, error_payload)
 
+    update_job(
+        job_id=job_id,
+        status_value="error",
+        stage="error",
+        progress_percent=100,
+        message="Error callback sent" if callback_ok else "Error callback failed",
+        extra={
+            "callback_sent": callback_ok,
+            "error_message": error_message,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Quality helpers
+# ─────────────────────────────────────────────────────────────
 
 def classify_pose_reliability(
     analysis_mode: str,
     real_pose_detected: bool,
     detection_ratio: float,
     detected_keypoints_count: float,
+    frame_count_processed: int,
 ) -> str:
     """
-    Convert raw pose stats into a simple reliability label for Base44.
+    Coaching-facing reliability label.
 
-    This is a coaching-facing reliability classification,
-    not a biomechanical certainty score.
+    This is not a certified biomechanical accuracy score.
     """
+    if frame_count_processed <= 0:
+        return "failed"
+
     if analysis_mode == "real_pose" and real_pose_detected:
-        if detection_ratio >= 0.60 and detected_keypoints_count >= 8:
+        if detection_ratio >= 0.65 and detected_keypoints_count >= 8:
             return "reliable"
-        if detection_ratio >= 0.35 and detected_keypoints_count >= 6:
+
+        if detection_ratio >= 0.45 and detected_keypoints_count >= 7:
             return "partial"
-        return "weak"
+
+        if detection_ratio >= 0.25 and detected_keypoints_count >= 5:
+            return "weak"
 
     if detection_ratio > 0:
         return "weak"
@@ -593,33 +631,75 @@ def classify_pose_reliability(
     return "failed"
 
 
+def can_emit_ai_findings(
+    analysis_mode: str,
+    real_pose_detected: bool,
+    pose_reliability: str,
+    detection_ratio: float,
+    detected_keypoints_count: float,
+    findings: List[Dict[str, Any]],
+) -> bool:
+    """
+    Final AI output gate.
+
+    If this returns False, the app gets manual-review state with zero AI findings.
+    """
+    if analysis_mode != "real_pose":
+        return False
+
+    if not real_pose_detected:
+        return False
+
+    if pose_reliability not in ["reliable", "partial"]:
+        return False
+
+    if detection_ratio < 0.45:
+        return False
+
+    if detected_keypoints_count < 7:
+        return False
+
+    if not findings:
+        return False
+
+    return True
+
+
 def build_quality_flags(
     detection_ratio: float,
     detected_keypoints_count: float,
+    frame_count_processed: int,
+    total_duration: float,
     camera_angle: str,
-    signed_video_url: str,
 ) -> List[str]:
-    """
-    Build non-judgemental quality flags for the coach.
-
-    These flags explain why AI may have failed or why manual review is needed.
-    """
     flags: List[str] = []
 
+    if frame_count_processed <= 0:
+        flags.append("no_frames_processed")
+
     if detection_ratio < 0.30:
-        flags.append("too_few_keypoints")
+        flags.append("too_few_pose_frames")
         flags.append("low_visibility")
 
     if detected_keypoints_count < 6:
         flags.append("low_keypoint_count")
 
-    camera = camera_angle.lower()
+    if total_duration and total_duration < 4:
+        flags.append("short_clip")
+
+    if total_duration and total_duration > 15:
+        flags.append("long_clip")
+
+    camera = (camera_angle or "").lower()
+
     if "underwater" in camera:
         flags.append("underwater_distortion")
 
-    url = signed_video_url.lower()
-    if "screenrecording" in url or "screen-recording" in url or "screen" in url:
+    if "screen" in camera:
         flags.append("screen_recording_possible")
+
+    if "front" in camera or "head" in camera:
+        flags.append("non_side_angle")
 
     return list(dict.fromkeys(flags))
 
@@ -629,21 +709,19 @@ def get_recommended_next_action(
     pose_reliability: str,
     quality_flags: List[str],
 ) -> str:
-    """
-    Give Base44 a clear next action to display.
-
-    This is guidance only and should not create fake findings.
-    """
     if analysis_mode == "real_pose" and pose_reliability in ["reliable", "partial"]:
         return "real_pose_review_ready"
 
     if "underwater_distortion" in quality_flags:
-        return "try_above_water_angle"
+        return "try_above_water_side_angle"
 
     if "screen_recording_possible" in quality_flags:
-        return "use_clearer_video"
+        return "use_original_video_export"
 
-    if "too_few_keypoints" in quality_flags or "low_visibility" in quality_flags:
-        return "try_side_angle"
+    if "too_few_pose_frames" in quality_flags or "low_visibility" in quality_flags:
+        return "try_clearer_side_angle"
+
+    if "long_clip" in quality_flags:
+        return "trim_to_5_10_seconds"
 
     return "manual_review_recommended"
