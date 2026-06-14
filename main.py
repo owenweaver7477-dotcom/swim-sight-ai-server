@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # FastAPI app
 # ─────────────────────────────────────────────────────────────
 
-AI_ENGINE_VERSION = "pose-mvp-0.3"
+AI_ENGINE_VERSION = "pose-mvp-0.4"
 
 app = FastAPI(
     title="Swim Sight AI Server",
@@ -650,13 +650,13 @@ def can_emit_ai_findings(
     if not real_pose_detected:
         return False
 
-    if pose_reliability not in ["reliable", "partial"]:
+    if pose_reliability != "reliable":
         return False
 
-    if detection_ratio < 0.45:
+    if detection_ratio < 0.65:
         return False
 
-    if detected_keypoints_count < 7:
+    if detected_keypoints_count < 8:
         return False
 
     if not findings:
