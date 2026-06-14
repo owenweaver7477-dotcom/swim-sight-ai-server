@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 MAX_FRAMES = 20
 SAMPLE_INTERVAL_SECONDS = 0.5
 MAX_FRAME_WIDTH = 640
-MAX_DOWNLOAD_MB = 120
+MAX_DOWNLOAD_MB = 250
 
 
 async def download_video(video_upload_id: str, signed_url: str) -> Optional[str]:
