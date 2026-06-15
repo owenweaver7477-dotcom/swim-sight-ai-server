@@ -1,6 +1,6 @@
 from typing import Dict, Any
 
-AI_ENGINE_VERSION = "pose-mvp-0.4"
+AI_ENGINE_VERSION = "pose-mvp-0.5"
 MODEL_NAME = "mediapipe_pose"
 
 

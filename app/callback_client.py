@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 CALLBACK_TIMEOUT_SECONDS = 30.0
 

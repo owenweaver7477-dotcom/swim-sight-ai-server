@@ -24,13 +24,16 @@ from app.utils import build_error_callback
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 # ─────────────────────────────────────────────────────────────
 # FastAPI app
 # ─────────────────────────────────────────────────────────────
 
-AI_ENGINE_VERSION = "pose-mvp-0.4"
+AI_ENGINE_VERSION = "pose-mvp-0.5"
 
 app = FastAPI(
     title="Swim Sight AI Server",
@@ -267,10 +270,32 @@ async def run_analysis_pipeline(
             },
         )
 
-        video_path = await download_video(
+        download_result = await download_video(
             video_upload_id=request.video_upload_id,
             signed_url=request.signed_video_url,
         )
+        video_path = download_result.path
+
+        if download_result.manual_review_reason:
+            await send_manual_review_result(
+                request=request,
+                job_id=job_id,
+                stage_history=stage_history,
+                started_at=started_at,
+                stage_message="Video skipped before AI processing",
+                quality_flags=download_result.quality_flags or ["video_too_large_for_worker"],
+                video_metadata={
+                    "file_size_mb": download_result.file_size_mb,
+                    "processing_tier": "manual_review_required",
+                    "manual_review_reason": download_result.manual_review_reason,
+                    "quality_flags": download_result.quality_flags,
+                },
+                error_message=(
+                    "This video is larger than the current AI worker can download safely. "
+                    "Manual coach review is recommended."
+                ),
+            )
+            return
 
         if not video_path:
             await send_error_result(
@@ -288,28 +313,104 @@ async def run_analysis_pipeline(
             stage_history,
             job_id,
             "running",
-            "extracting_frames",
-            30,
-            "Extracting review frames",
+            "downloaded_video",
+            20,
+            "Private video downloaded",
         )
 
-        frames, fps, total_duration = extract_frames(video_path)
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "metadata_read",
+            25,
+            "Reading video metadata and workload risk",
+        )
 
-        if not frames:
-            await send_error_result(
+        extraction = extract_frames(
+            video_path,
+            video_upload_id=request.video_upload_id,
+            filename=getattr(request, "original_filename", None),
+            capture_source=getattr(request, "capture_source", None),
+        )
+        frames = extraction.frames
+        video_metadata = extraction.metadata or {}
+        fps = float(video_metadata.get("fps") or 0.0)
+        total_duration = float(video_metadata.get("duration_seconds") or 0.0)
+        quality_flags_from_video = list(video_metadata.get("quality_flags") or [])
+
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "processing_tier_selected",
+            30,
+            f"Selected {video_metadata.get('processing_tier', 'unknown')} processing tier",
+            {
+                "processing_tier": video_metadata.get("processing_tier"),
+                "file_size_mb": video_metadata.get("file_size_mb"),
+                "source_width": video_metadata.get("source_width"),
+                "source_height": video_metadata.get("source_height"),
+                "video_fps": video_metadata.get("fps"),
+                "video_duration_seconds": video_metadata.get("duration_seconds"),
+                "quality_flags": quality_flags_from_video,
+                "manual_review_reason": video_metadata.get("manual_review_reason"),
+            },
+        )
+
+        if video_metadata.get("processing_tier") == "manual_review_required":
+            await send_manual_review_result(
                 request=request,
                 job_id=job_id,
                 stage_history=stage_history,
                 started_at=started_at,
-                error_message="Could not extract frames from video file.",
-                stage_message="Frame extraction failed",
-                quality_flags=["frame_extraction_failed"],
+                stage_message="Manual review selected before AI processing",
+                quality_flags=quality_flags_from_video or ["video_too_heavy_for_ai_processing"],
+                video_metadata=video_metadata,
+                error_message=(
+                    "This video is too risky for the current AI worker to process safely. "
+                    "Manual coach review is recommended."
+                ),
+            )
+            return
+
+        if not frames:
+            await send_manual_review_result(
+                request=request,
+                job_id=job_id,
+                stage_history=stage_history,
+                started_at=started_at,
+                stage_message="Frame extraction could not produce usable frames",
+                quality_flags=list(dict.fromkeys([*quality_flags_from_video, "frame_extraction_failed"])),
+                video_metadata=video_metadata,
+                error_message=(
+                    "The worker could not extract usable frames from this video. "
+                    "Manual coach review is recommended."
+                ),
             )
             return
 
         logger.info(
             f"[{request.video_upload_id}] Extracted {len(frames)} sampled frames "
-            f"fps={fps:.2f}, duration={total_duration:.2f}s"
+            f"fps={fps:.2f}, duration={total_duration:.2f}s, "
+            f"tier={video_metadata.get('processing_tier')}"
+        )
+
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "extracting_frames",
+            42,
+            f"Extracted {len(frames)} review frames",
+            {
+                "frame_count_processed": len(frames),
+                "video_fps": round(fps, 2),
+                "video_duration_seconds": round(total_duration, 2),
+                "processing_tier": video_metadata.get("processing_tier"),
+                "processed_width": video_metadata.get("processed_width"),
+                "processed_height": video_metadata.get("processed_height"),
+            },
         )
 
         add_stage(
@@ -323,10 +424,27 @@ async def run_analysis_pipeline(
                 "frame_count_processed": len(frames),
                 "video_fps": round(fps, 2),
                 "video_duration_seconds": round(total_duration, 2),
+                "processing_tier": video_metadata.get("processing_tier"),
             },
         )
 
         pose_results = run_pose_estimation(frames)
+
+        if not pose_results:
+            await send_manual_review_result(
+                request=request,
+                job_id=job_id,
+                stage_history=stage_history,
+                started_at=started_at,
+                stage_message="Pose processing did not return usable results",
+                quality_flags=list(dict.fromkeys([*quality_flags_from_video, "pose_processing_failed"])),
+                video_metadata=video_metadata,
+                error_message=(
+                    "Pose processing did not return usable swimmer evidence. "
+                    "Manual coach review is recommended."
+                ),
+            )
+            return
 
         frame_count_processed = len(pose_results)
         detected_frames = [r for r in pose_results if r.get("pose_detected")]
@@ -388,6 +506,7 @@ async def run_analysis_pipeline(
             total_duration=total_duration,
             camera_angle=request.camera_angle or "",
         )
+        quality_flags = list(dict.fromkeys([*quality_flags_from_video, *quality_flags]))
 
         recommended_next_action = get_recommended_next_action(
             analysis_mode=analysis_mode,
@@ -438,6 +557,13 @@ async def run_analysis_pipeline(
             "frame_count_processed": frame_count_processed,
             "detected_pose_frames": detected_count,
             "detected_keypoints_count": detected_keypoints_count,
+            "processing_tier": video_metadata.get("processing_tier"),
+            "source_width": video_metadata.get("source_width"),
+            "source_height": video_metadata.get("source_height"),
+            "processed_width": video_metadata.get("processed_width"),
+            "processed_height": video_metadata.get("processed_height"),
+            "processing_window_seconds": video_metadata.get("processing_window_seconds"),
+            "sampled_frame_count": video_metadata.get("sampled_frame_count", frame_count_processed),
         })
 
         add_stage(
@@ -592,6 +718,92 @@ async def send_error_result(
         extra={
             "callback_sent": callback_ok,
             "error_message": error_message,
+        },
+    )
+
+
+async def send_manual_review_result(
+    request: VideoProcessingRequest,
+    job_id: str,
+    stage_history: List[Dict[str, Any]],
+    started_at: float,
+    stage_message: str,
+    quality_flags: Optional[List[str]] = None,
+    video_metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+):
+    processing_duration = round(time.time() - started_at, 2)
+    metadata = video_metadata or {}
+    flags = list(dict.fromkeys(quality_flags or ["manual_review_recommended"]))
+    if "manual_review_recommended" not in flags:
+        flags.append("manual_review_recommended")
+
+    add_stage(
+        stage_history,
+        job_id,
+        "manual_review_recommended",
+        "manual_review_fallback",
+        100,
+        stage_message,
+        {
+            "processing_duration_seconds": processing_duration,
+            "processing_tier": metadata.get("processing_tier"),
+            "quality_flags": flags,
+            "manual_review_reason": metadata.get("manual_review_reason"),
+        },
+    )
+
+    payload = {
+        "job_id": job_id,
+        "server_job_id": job_id,
+        "video_upload_id": request.video_upload_id,
+        "engine": AI_ENGINE_VERSION,
+        "status": "manual_review_recommended",
+        "analysis_mode": "manual_review",
+        "real_pose_detected": False,
+        "findings": [],
+        "overall_score": None,
+        "phase_breakdown": {},
+        "drag_analysis": [],
+        "key_frames": [],
+        "technical_summary": (
+            error_message
+            or "The video was not safe enough for reliable pose-assisted analysis. Manual coach review is recommended."
+        ),
+        "error_message": error_message,
+        "stage_history": stage_history,
+        "processing_duration_seconds": processing_duration,
+        "video_duration_seconds": metadata.get("duration_seconds"),
+        "video_fps": metadata.get("fps"),
+        "detection_ratio": 0,
+        "pose_reliability": "failed",
+        "quality_flags": flags,
+        "recommended_next_action": "manual_review_recommended",
+        "frame_count_processed": metadata.get("sampled_frame_count", 0) or 0,
+        "detected_pose_frames": 0,
+        "detected_keypoints_count": 0,
+        "processing_tier": metadata.get("processing_tier"),
+        "source_width": metadata.get("source_width"),
+        "source_height": metadata.get("source_height"),
+        "processed_width": metadata.get("processed_width"),
+        "processed_height": metadata.get("processed_height"),
+        "processing_window_seconds": metadata.get("processing_window_seconds"),
+        "sampled_frame_count": metadata.get("sampled_frame_count", 0) or 0,
+    }
+
+    callback_ok = await send_callback(request.callback_url, payload)
+
+    update_job(
+        job_id=job_id,
+        status_value="manual_review_recommended",
+        stage="manual_review_fallback",
+        progress_percent=100,
+        message="Manual review callback sent" if callback_ok else "Manual review callback failed",
+        extra={
+            "callback_sent": callback_ok,
+            "quality_flags": flags,
+            "processing_tier": metadata.get("processing_tier"),
+            "manual_review_reason": metadata.get("manual_review_reason"),
         },
     )
 

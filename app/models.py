@@ -16,6 +16,10 @@ class VideoProcessingRequest(BaseModel):
     frame_rate: Optional[float] = 30.0
     callback_url: str
     capture_source: Optional[str] = None
+    original_filename: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    file_size_mb: Optional[float] = None
+    duration_seconds: Optional[float] = None
     review_context: Optional[Dict[str, Any]] = None
     max_sampled_frames: Optional[int] = None
     downscale_frames: Optional[bool] = None

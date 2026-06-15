@@ -7,7 +7,7 @@ from app.pose_estimator import get_midpoint, horizontal_distance, vertical_dista
 
 logger = logging.getLogger(__name__)
 
-AI_ENGINE_VERSION = "pose-mvp-0.4"
+AI_ENGINE_VERSION = "pose-mvp-0.5"
 MODEL_NAME = "mediapipe_pose"
 
 MIN_DETECTION_RATIO = 0.30

@@ -48,6 +48,9 @@ def run_pose_estimation(frames: list) -> List[Dict[str, Any]]:
         ) as pose:
             for original_idx, frame_rgb in frames:
                 try:
+                    if not frame_rgb.flags["C_CONTIGUOUS"]:
+                        frame_rgb = np.ascontiguousarray(frame_rgb)
+                    frame_rgb.flags.writeable = False
                     frame_result = _process_frame(pose, frame_rgb, original_idx)
                     results.append(frame_result)
                 except Exception as frame_error:
@@ -61,6 +64,11 @@ def run_pose_estimation(frames: list) -> List[Dict[str, Any]]:
                         "landmarks": {},
                         "error": "frame_pose_failed",
                     })
+                finally:
+                    try:
+                        frame_rgb.flags.writeable = True
+                    except Exception:
+                        pass
 
     except Exception as error:
         logger.exception(f"Pose estimation failed completely: {error}")
@@ -87,6 +95,9 @@ def run_pose_estimation(frames: list) -> List[Dict[str, Any]]:
         f"Pose estimation complete: {detected}/{len(results)} frames detected, "
         f"avg keypoints={avg_kps:.1f}"
     )
+
+    if results and detected / len(results) < 0.10:
+        logger.warning("Pose estimation produced very weak evidence; manual review likely")
 
     return results
 
