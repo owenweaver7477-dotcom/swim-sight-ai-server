@@ -1,0 +1,51 @@
+{
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "server_job_id": "11111111-1111-4111-8111-111111111111",
+  "video_upload_id": "22222222-2222-4222-8222-222222222222",
+  "engine": "pose-mvp-0.5",
+  "status": "manual_review_recommended",
+  "analysis_mode": "manual_review",
+  "real_pose_detected": false,
+  "findings": [],
+  "overall_score": null,
+  "phase_breakdown": {},
+  "drag_analysis": [],
+  "key_frames": [],
+  "technical_summary": "The video did not provide enough reliable pose evidence for AI draft findings. Manual Coach Studio review is recommended.",
+  "error_message": null,
+  "stage_history": [
+    {
+      "stage": "processing_tier_selected",
+      "status": "running",
+      "progress_percent": 28,
+      "message": "Selected minimal_ai processing tier"
+    },
+    {
+      "stage": "manual_review_fallback",
+      "status": "manual_review_recommended",
+      "progress_percent": 100,
+      "message": "Manual review recommended"
+    }
+  ],
+  "processing_duration_seconds": 7.2,
+  "video_duration_seconds": 12.5,
+  "video_fps": 60.0,
+  "detection_ratio": 0,
+  "pose_reliability": "failed",
+  "quality_flags": [
+    "minimal_ai_sampling",
+    "pose_reliability_not_coach_grade",
+    "manual_review_recommended"
+  ],
+  "recommended_next_action": "manual_review_recommended",
+  "frame_count_processed": 12,
+  "detected_pose_frames": 0,
+  "detected_keypoints_count": 0,
+  "processing_tier": "minimal_ai",
+  "source_width": 2940,
+  "source_height": 1912,
+  "processed_width": 360,
+  "processed_height": 234,
+  "processing_window_seconds": 8,
+  "sampled_frame_count": 12
+}
