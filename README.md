@@ -112,3 +112,5 @@ curl http://localhost:10000/health
 See `AI_WORKER_CONTRACT.md` for the frozen Phase 15B request, response, callback, status, and roadmap compatibility contract.
 
 Example payloads live in `fixtures/`.
+
+See `BASELINE_EVALUATION.md` for Phase 15C fixture validation, endpoint contract tests, and local sample-clip baseline evaluation commands.

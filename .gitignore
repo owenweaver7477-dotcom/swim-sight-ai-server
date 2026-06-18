@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .DS_Store
 main_placeholder_backup.py
+samples/videos/*
+!samples/videos/.gitkeep
+baseline_reports/*
+!baseline_reports/.gitkeep
