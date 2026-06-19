@@ -1,0 +1,94 @@
+{
+  "_comment": "PILOT-ONLY example. estimated_drag appears ONLY when ENABLE_ESTIMATED_DRAG=true. Not part of the stable contract; not used by shared reports.",
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "server_job_id": "11111111-1111-4111-8111-111111111111",
+  "video_upload_id": "22222222-2222-4222-8222-222222222222",
+  "engine": "pose-mvp-0.5",
+  "status": "completed",
+  "analysis_mode": "real_pose",
+  "real_pose_detected": true,
+  "overall_score": 80,
+  "phase_breakdown": {
+    "body_line": {
+      "score": 78,
+      "finding_count": 1
+    }
+  },
+  "findings": [
+    {
+      "finding_title": "Hips drop through the stroke",
+      "stroke_phase": "body_line",
+      "fault_tag": "body_line_loss",
+      "severity": "medium",
+      "confidence": 0.74,
+      "timestamp_seconds": 2.1,
+      "observation": "Pose evidence suggests the hips sit below the shoulder line.",
+      "impact": "A lower hip line can add resistance and weaken the catch.",
+      "coach_cue": "Hold a long line from head through hips before adding speed.",
+      "recommended_drill": "Streamline kick with a quiet head",
+      "quality_flags": []
+    }
+  ],
+  "drag_analysis": [],
+  "estimated_drag": {
+    "label": "estimated_drag",
+    "basis": "estimated (monocular anthropometric scale from MediaPipe pose) -- not measured",
+    "pose_source": "mediapipe_pose",
+    "stroke": "freestyle",
+    "confidence_low": false,
+    "reliable_frame_fraction": 0.74,
+    "scale_m_per_unit": 3.012,
+    "scale_reference_frame": 96,
+    "frames_analysed": 34,
+    "summary": {
+      "mean_drag_force_n": 48.6,
+      "peak_drag_force_n": 61.2,
+      "mean_drag_to_weight_ratio": 0.066,
+      "peak_velocity_m_s": 1.72,
+      "mean_propulsive_force_n": 50.1,
+      "peak_propulsive_force_n": 73.4
+    },
+    "series": {
+      "timestamp_s": [0.0, 0.1, 0.2, 0.3],
+      "velocity_m_s": [1.55, 1.62, 1.68, 1.6],
+      "drag_force_n": [39.5, 43.1, 46.8, 42.0],
+      "drag_to_weight_ratio": [0.054, 0.059, 0.064, 0.057],
+      "propulsive_force_n": [41.0, 44.2, 48.0, 43.1],
+      "net_force_n": [1.5, 1.1, 1.2, 1.1]
+    }
+  },
+  "key_frames": [
+    {
+      "timestamp_seconds": 2.1,
+      "frame_label": "Body line",
+      "stroke_phase": "body_line"
+    }
+  ],
+  "technical_summary": "Pose-assisted draft findings are ready for coach review.",
+  "error_message": null,
+  "stage_history": [
+    {
+      "stage": "completed",
+      "status": "completed",
+      "progress_percent": 100,
+      "message": "Pose-assisted analysis completed"
+    }
+  ],
+  "processing_duration_seconds": 17.2,
+  "video_duration_seconds": 9.4,
+  "video_fps": 30.0,
+  "detection_ratio": 0.74,
+  "pose_reliability": "reliable",
+  "quality_flags": [],
+  "recommended_next_action": "real_pose_review_ready",
+  "frame_count_processed": 52,
+  "detected_pose_frames": 39,
+  "detected_keypoints_count": 12.0,
+  "processing_tier": "standard_ai",
+  "source_width": 1920,
+  "source_height": 1080,
+  "processed_width": 640,
+  "processed_height": 360,
+  "processing_window_seconds": 9.4,
+  "sampled_frame_count": 52
+}

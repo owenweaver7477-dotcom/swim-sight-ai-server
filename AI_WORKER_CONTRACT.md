@@ -65,6 +65,8 @@ Recommended request fields:
 - `review_context`
 - `max_sampled_frames`
 - `downscale_frames`
+- `swimmer_height_cm` (optional; server-side only, drives drag estimate)
+- `swimmer_mass_kg` (optional; server-side only, drives drag estimate)
 
 Accepted response:
 
@@ -159,6 +161,7 @@ The callback may include:
 - `overall_score`
 - `phase_breakdown`
 - `drag_analysis`
+- `estimated_drag` (optional; anthropometric drag estimate, see below)
 - `key_frames`
 - `technical_summary`
 - `error_message`
@@ -180,6 +183,37 @@ The callback may include:
 - `processed_height`
 - `processing_window_seconds`
 - `sampled_frame_count`
+
+## `estimated_drag` (internal pilot prototype — disabled by default)
+
+`estimated_drag` is an **internal pilot-only prototype**. It is **disabled by
+default** and gated behind the `ENABLE_ESTIMATED_DRAG` environment variable
+(default `false`). It is **not a live measurement tool**, **not part of shared
+reports**, and **not part of the stable public callback contract yet** — its
+shape may change and consumers must not depend on it.
+
+When `ENABLE_ESTIMATED_DRAG` is unset or false, the worker behaves exactly as
+before: no `estimated_drag` field, no height/mass output, no extra error path,
+no blocked analysis, and no change to the manual-review fallback.
+
+When `ENABLE_ESTIMATED_DRAG=true`, the block is included only when real pose was
+detected, the analysis is `real_pose` (not a manual-review fallback), and the
+request supplied `swimmer_height_cm` and `swimmer_mass_kg`. It is best-effort and
+never blocks the callback. Values are an ESTIMATE derived from monocular pose
+scale, not a measurement.
+
+Always present when the block is included:
+
+- `summary.mean_drag_force_n`, `summary.peak_drag_force_n`
+- `summary.mean_drag_to_weight_ratio`
+- per-frame `series.drag_force_n`, `series.drag_to_weight_ratio`
+
+Included only when `confidence_low` is `false`:
+
+- `summary.mean_propulsive_force_n`, `summary.peak_propulsive_force_n`
+- per-frame `series.propulsive_force_n`, `series.net_force_n`
+
+The block never contains swimmer height, mass, or any identifying profile value.
 
 ## Callback Statuses
 

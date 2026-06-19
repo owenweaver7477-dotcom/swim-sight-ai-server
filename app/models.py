@@ -23,6 +23,10 @@ class VideoProcessingRequest(BaseModel):
     review_context: Optional[Dict[str, Any]] = None
     max_sampled_frames: Optional[int] = None
     downscale_frames: Optional[bool] = None
+    # Optional coach-entered anthropometrics (server-side only). Used to scale
+    # pose tracking and estimate drag/force. Never echoed in the callback.
+    swimmer_height_cm: Optional[float] = None
+    swimmer_mass_kg: Optional[float] = None
 
 
 class HealthResponse(BaseModel):

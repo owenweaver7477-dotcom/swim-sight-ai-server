@@ -566,6 +566,46 @@ async def run_analysis_pipeline(
             "sampled_frame_count": video_metadata.get("sampled_frame_count", frame_count_processed),
         })
 
+        # Estimated anthropometric drag is an INTERNAL PILOT prototype, OFF by
+        # default. It is controlled by the ENABLE_ESTIMATED_DRAG env flag (see
+        # AI_WORKER_CONTRACT.md). When the flag is unset/false this entire block
+        # is skipped, so the worker behaves EXACTLY as before: no estimated_drag
+        # field, no height/mass output, no extra error path, no blocked analysis,
+        # and no change to the manual-review fallback.
+        if os.getenv("ENABLE_ESTIMATED_DRAG", "false").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                from app.pose_worker_integration import (
+                    should_emit_estimated_drag,
+                    analyse_clip,
+                )
+
+                # Single-source gate: flag ON + real pose + real_pose mode
+                # (not manual-review fallback) + both anthropometrics present.
+                if should_emit_estimated_drag(
+                    analysis_mode=analysis_payload.get("analysis_mode"),
+                    real_pose_detected=analysis_payload.get("real_pose_detected"),
+                    height_cm=request.swimmer_height_cm,
+                    mass_kg=request.swimmer_mass_kg,
+                ):
+                    estimated_drag = analyse_clip(
+                        pose_results,
+                        fps=fps,
+                        height_cm=request.swimmer_height_cm,
+                        mass_kg=request.swimmer_mass_kg,
+                        stroke=request.stroke_type or "Freestyle",
+                    )
+                    if estimated_drag:
+                        analysis_payload["estimated_drag"] = estimated_drag
+                        logger.info(
+                            f"[{request.video_upload_id}] estimated_drag attached (pilot): "
+                            f"mean_drag={estimated_drag['summary']['mean_drag_force_n']}N, "
+                            f"confidence_low={estimated_drag['confidence_low']}"
+                        )
+            except Exception as drag_error:
+                logger.warning(
+                    f"[{request.video_upload_id}] estimated_drag skipped: {drag_error}"
+                )
+
         add_stage(
             stage_history,
             job_id,
