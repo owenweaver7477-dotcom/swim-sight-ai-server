@@ -6,5 +6,6 @@ __pycache__/
 main_placeholder_backup.py
 samples/videos/*
 !samples/videos/.gitkeep
+samples/labels.local.json
 baseline_reports/*
 !baseline_reports/.gitkeep

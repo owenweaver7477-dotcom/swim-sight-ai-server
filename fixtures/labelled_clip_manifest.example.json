@@ -1,0 +1,17 @@
+{
+  "clips": [
+    {
+      "file": "example-breaststroke-side.mp4",
+      "stroke": "Breaststroke",
+      "camera_angle": "Side",
+      "expected_analysis_mode": "real_pose",
+      "expected_fault_tags": [
+        "wide_breaststroke_kick"
+      ],
+      "forbidden_fault_tags": [
+        "dropped_elbow_catch"
+      ],
+      "coach_notes": "Example only. Replace with locally labelled footage and do not commit athlete data."
+    }
+  ]
+}

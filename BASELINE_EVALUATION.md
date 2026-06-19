@@ -16,11 +16,34 @@ Use the baseline harness to record:
 - frames with usable pose
 - pose detection rate
 - average visible keypoints
+- average visible landmarks from the full internal 33-point schema
 - finding count
 - fallback/manual-review state
 - quality flags
 
 These metrics give future upgrades something honest to beat.
+
+## Coach-Labelled Clip Evaluation
+
+Copy the example manifest without committing athlete data:
+
+```bash
+cp fixtures/labelled_clip_manifest.example.json samples/labels.local.json
+```
+
+Edit `samples/labels.local.json` so each entry references a local file in
+`samples/videos/` and records the coach-expected analysis mode, expected fault
+tags, and any explicitly forbidden fault tags. Then run:
+
+```bash
+python3 scripts/evaluate_labelled_clips.py
+```
+
+The report records matched, missed, unexpected, and forbidden findings, plus
+per-clip precision and recall. It is written to
+`baseline_reports/labelled_evaluation_<timestamp>.json`, which is ignored by
+git. Passing contract tests is not evidence that a feature flag improves real
+coaching accuracy; labelled representative clips are required.
 
 ## Combined Upgrade Test Runner
 
@@ -31,8 +54,9 @@ python3 scripts/test_upgrades.py
 ```
 
 The runner executes fixture validation, worker contract tests, drag integration,
-pose post-processing, robust findings, and Python compilation in order. It does
-not hide failed checks. Missing worker dependencies are listed before testing.
+pose post-processing, robust findings, temporal metrics, labelled-evaluation
+logic, durable-queue configuration, and Python compilation in order. It does not
+hide failed checks. Missing worker dependencies are listed before testing.
 
 ## Fixture Validation
 
