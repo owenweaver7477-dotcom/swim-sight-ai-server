@@ -15,6 +15,7 @@ import numpy as np  # noqa: E402
 from app.pose_worker_integration import (  # noqa: E402
     analyse_clip, synthetic_pose_results, HIP_L, HIP_R,
     estimated_drag_enabled, should_emit_estimated_drag,
+    estimate_scale, froude_wave_factor, wave_drag_enabled,
 )
 
 results = []
@@ -145,6 +146,32 @@ def _walk(v):
             yield from _walk(x)
 check("8d. pilot fixture has no unsafe strings",
       not any(p.search(s) for s in _walk(pilot) for p in _UNSAFE))
+
+
+# 9) Drag/metrics upgrades --------------------------------------------------
+# Robust scale: a single outlier frame (ankle mis-detected far away) must NOT
+# fool the body-length estimate the way the old single-max did.
+pr_out = synthetic_pose_results(fps=30, seconds=6.0, true_v=1.6, height_cm=180.0, seed=5)
+pr_out[len(pr_out) // 2]["landmarks"]["right_ankle"] = {"x": 5.0, "y": 5.0, "visibility": 0.9}
+sc = estimate_scale(pr_out, 1.80)
+check("9. robust scale ignores a single outlier frame",
+      sc is not None and abs(sc["scale_m_per_unit"] - 3.6) / 3.6 <= 0.12,
+      None if sc is None else round(sc["scale_m_per_unit"], 3))
+
+# Calibration override is used verbatim.
+pcal = analyse_clip(pr, fps=30, height_cm=180.0, mass_kg=75.0, scale_m_per_unit_override=3.0)
+check("9a. calibration override used", pcal is not None and pcal["scale_m_per_unit"] == 3.0)
+check("9b. override basis says 'calibrated'", pcal is not None and "calibrated" in pcal["basis"])
+
+# Intra-cycle velocity metrics present.
+check("9c. intra-cycle velocity fields present",
+      p is not None and "velocity_drop_ratio" in p["summary"] and "min_velocity_m_s" in p["summary"])
+
+# Froude wave factor: identity at v=0, >1 and capped for v>0.
+check("9d. froude factor = 1.0 at v=0", froude_wave_factor(0.0, 0.5) == 1.0)
+wf = froude_wave_factor(2.0, 0.5)
+check("9e. froude factor > 1 and capped <= 1.6", 1.0 < wf <= 1.6, round(wf, 3))
+check("9f. ENABLE_WAVE_DRAG off by default", wave_drag_enabled({}) is False)
 
 
 print("\n" + "=" * 56)

@@ -74,6 +74,12 @@ def evaluate_video(video_path: Path, stroke: str, camera_angle: str) -> Dict[str
     if not analysis.get("real_pose_detected"):
         fallback_triggered = True
 
+    temporal_metrics = analysis.get("temporal_metrics") or {}
+    quality_flags = list(dict.fromkeys([
+        *(metadata.get("quality_flags") or []),
+        *(temporal_metrics.get("quality_flags") or []),
+    ]))
+
     return {
         "engine": AI_ENGINE_VERSION,
         "video": video_path.name,
@@ -97,12 +103,29 @@ def evaluate_video(video_path: Path, stroke: str, camera_angle: str) -> Dict[str
             if pose_results
             else 0
         ),
+        "visible_landmarks_average": (
+            round(
+                sum(
+                    result.get("landmark_count_total", result.get("keypoint_count", 0))
+                    for result in pose_results
+                ) / len(pose_results),
+                2,
+            )
+            if pose_results
+            else 0
+        ),
         "analysis_mode": analysis.get("analysis_mode"),
         "real_pose_detected": bool(analysis.get("real_pose_detected")),
         "finding_count": len(analysis.get("findings") or []),
+        "finding_fault_tags": sorted({
+            finding.get("fault_tag")
+            for finding in (analysis.get("findings") or [])
+            if finding.get("fault_tag")
+        }),
         "overall_score": analysis.get("overall_score"),
         "fallback_triggered": fallback_triggered,
-        "quality_flags": metadata.get("quality_flags") or [],
+        "quality_flags": quality_flags,
+        "temporal_metrics": temporal_metrics,
         "processing_seconds": round(time.perf_counter() - started, 2),
         "notes": [],
     }

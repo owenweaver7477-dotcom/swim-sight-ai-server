@@ -289,6 +289,34 @@ def _metadata_from_capture(
     }
 
 
+def inspect_video(
+    video_path: str,
+    video_upload_id: str = "unknown-video",
+    filename: Optional[str] = None,
+    capture_source: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read and classify video metadata before allocating sampled frames."""
+    cap = cv2.VideoCapture(video_path)
+    try:
+        if not cap.isOpened():
+            logger.error(f"[{video_upload_id}] Cannot open downloaded video metadata")
+            return classify_video_workload({
+                "filename": filename,
+                "capture_source": capture_source,
+                "quality_flags": ["metadata_unreadable"],
+            })
+        return classify_video_workload(
+            _metadata_from_capture(
+                cap,
+                video_path,
+                filename=filename,
+                capture_source=capture_source,
+            )
+        )
+    finally:
+        cap.release()
+
+
 def _even_frame_indices(frame_count_window: int, max_frames: int) -> List[int]:
     if frame_count_window <= 0 or max_frames <= 0:
         return []
@@ -304,11 +332,37 @@ def _even_frame_indices(frame_count_window: int, max_frames: int) -> List[int]:
     })
 
 
+def _sequential_read_enabled() -> bool:
+    """
+    When SEQUENTIAL_FRAME_READ is truthy, decode the processing window in ONE
+    forward pass and pick the target frames, instead of doing a `cap.set` seek
+    per frame. Seeking per frame is slow and can be inaccurate on long-GOP
+    codecs; a single sequential pass is usually faster and more reliable.
+    OFF by default to preserve current behaviour.
+    """
+    return os.getenv("SEQUENTIAL_FRAME_READ", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _prepare_frame(frame, max_width: int):
+    """Resize (if wider than max_width) and convert BGR->RGB. Returns (rgb, w, h)."""
+    original_height, original_width = frame.shape[:2]
+    if original_width > max_width:
+        scale = max_width / original_width
+        new_width = max_width
+        new_height = max(1, int(original_height * scale))
+        frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+    else:
+        new_height, new_width = original_height, original_width
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return frame_rgb, new_width, new_height
+
+
 def extract_frames(
     video_path: str,
     video_upload_id: str = "unknown-video",
     filename: Optional[str] = None,
     capture_source: Optional[str] = None,
+    inspected_metadata: Optional[Dict[str, Any]] = None,
 ) -> FrameExtractionResult:
     cap = None
     metadata: Dict[str, Any] = {
@@ -329,7 +383,7 @@ def extract_frames(
             })
             return FrameExtractionResult(frames=[], metadata=metadata)
 
-        metadata = classify_video_workload(
+        metadata = dict(inspected_metadata) if inspected_metadata else classify_video_workload(
             _metadata_from_capture(
                 cap,
                 video_path,
@@ -373,40 +427,50 @@ def extract_frames(
         processed_height = 0
         failed_reads = 0
 
-        for idx in frame_indices:
-            try:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        if _sequential_read_enabled() and frame_indices:
+            # One forward decode pass; pick target indices as we reach them.
+            target = set(frame_indices)
+            max_target = max(frame_indices)
+            current = 0
+            while current <= max_target:
                 ret, frame = cap.read()
-
                 if not ret or frame is None:
-                    failed_reads += 1
-                    continue
-
-                original_height, original_width = frame.shape[:2]
-
-                if original_width > max_width:
-                    scale = max_width / original_width
-                    new_width = max_width
-                    new_height = max(1, int(original_height * scale))
-                    frame = cv2.resize(
-                        frame,
-                        (new_width, new_height),
-                        interpolation=cv2.INTER_AREA,
-                    )
-                else:
-                    new_height, new_width = original_height, original_width
-
-                processed_width = processed_width or new_width
-                processed_height = processed_height or new_height
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append((idx, frame_rgb))
-
+                    failed_reads += sum(1 for t in target if t >= current)
+                    break
+                if current in target:
+                    try:
+                        frame_rgb, new_width, new_height = _prepare_frame(frame, max_width)
+                        processed_width = processed_width or new_width
+                        processed_height = processed_height or new_height
+                        frames.append((current, frame_rgb))
+                    except Exception as frame_error:
+                        failed_reads += 1
+                        logger.warning(
+                            f"[{video_upload_id}] Sequential frame {current} skipped: {frame_error}"
+                        )
                 del frame
-            except Exception as frame_error:
-                failed_reads += 1
-                logger.warning(
-                    f"[{video_upload_id}] Frame extraction skipped frame {idx}: {frame_error}"
-                )
+                current += 1
+        else:
+            for idx in frame_indices:
+                try:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                    ret, frame = cap.read()
+
+                    if not ret or frame is None:
+                        failed_reads += 1
+                        continue
+
+                    frame_rgb, new_width, new_height = _prepare_frame(frame, max_width)
+                    processed_width = processed_width or new_width
+                    processed_height = processed_height or new_height
+                    frames.append((idx, frame_rgb))
+
+                    del frame
+                except Exception as frame_error:
+                    failed_reads += 1
+                    logger.warning(
+                        f"[{video_upload_id}] Frame extraction skipped frame {idx}: {frame_error}"
+                    )
 
         flags = set(metadata.get("quality_flags") or [])
         if failed_reads:

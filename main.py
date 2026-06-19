@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import asyncio
 import uuid
 import time
 import logging
@@ -11,11 +12,12 @@ from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException, status
 
 from app.models import VideoProcessingRequest, HealthResponse
-from app.video_processor import download_video, extract_frames, cleanup_temp_file
+from app.video_processor import download_video, inspect_video, extract_frames, cleanup_temp_file
 from app.pose_estimator import run_pose_estimation
 from app.swim_analyzer import analyze_pose_data
 from app.callback_client import send_callback
 from app.utils import build_error_callback
+from app.durable_queue import DurableJobQueue
 
 
 # ─────────────────────────────────────────────────────────────
@@ -77,6 +79,7 @@ def health_check():
 # ─────────────────────────────────────────────────────────────
 
 JOBS: Dict[str, Dict[str, Any]] = {}
+DURABLE_QUEUE = DurableJobQueue()
 
 
 def now_iso() -> str:
@@ -119,6 +122,18 @@ def create_job(job_id: str, video_upload_id: str) -> None:
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
+    schedule_job_persistence(job_id)
+
+
+def schedule_job_persistence(job_id: str) -> None:
+    if not DURABLE_QUEUE.ready or job_id not in JOBS:
+        return
+    try:
+        asyncio.get_running_loop().create_task(
+            DURABLE_QUEUE.persist_job(dict(JOBS[job_id]))
+        )
+    except RuntimeError:
+        return
 
 
 def update_job(
@@ -148,6 +163,7 @@ def update_job(
         payload.update(extra)
 
     JOBS[job_id].update(payload)
+    schedule_job_persistence(job_id)
 
     logger.info(
         f"[job={job_id}] stage={stage} status={status_value} "
@@ -188,8 +204,11 @@ def add_stage(
 
 
 @app.get("/jobs/{job_id}", status_code=status.HTTP_200_OK)
-def get_job(job_id: str):
+async def get_job(job_id: str):
     job = JOBS.get(job_id)
+
+    if not job and DURABLE_QUEUE.ready:
+        job = await DURABLE_QUEUE.get_job(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -229,7 +248,16 @@ async def process_video(
         f"{safe_request_summary(request)}"
     )
 
-    background_tasks.add_task(run_analysis_pipeline, request, job_id)
+    if DURABLE_QUEUE.requested:
+        if not DURABLE_QUEUE.ready:
+            raise HTTPException(
+                status_code=503,
+                detail="Durable AI queue is configured but unavailable",
+            )
+        await DURABLE_QUEUE.persist_job(dict(JOBS[job_id]))
+        await DURABLE_QUEUE.enqueue(request, job_id)
+    else:
+        background_tasks.add_task(run_analysis_pipeline, request, job_id)
 
     return {
         "accepted": True,
@@ -322,22 +350,34 @@ async def run_analysis_pipeline(
             stage_history,
             job_id,
             "running",
-            "metadata_read",
+            "reading_video_metadata",
             25,
             "Reading video metadata and workload risk",
         )
 
-        extraction = extract_frames(
+        video_metadata = inspect_video(
             video_path,
             video_upload_id=request.video_upload_id,
             filename=getattr(request, "original_filename", None),
             capture_source=getattr(request, "capture_source", None),
         )
-        frames = extraction.frames
-        video_metadata = extraction.metadata or {}
-        fps = float(video_metadata.get("fps") or 0.0)
-        total_duration = float(video_metadata.get("duration_seconds") or 0.0)
         quality_flags_from_video = list(video_metadata.get("quality_flags") or [])
+
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "metadata_read",
+            28,
+            "Video metadata and workload risk read",
+            {
+                "file_size_mb": video_metadata.get("file_size_mb"),
+                "source_width": video_metadata.get("source_width"),
+                "source_height": video_metadata.get("source_height"),
+                "video_fps": video_metadata.get("fps"),
+                "video_duration_seconds": video_metadata.get("duration_seconds"),
+            },
+        )
 
         add_stage(
             stage_history,
@@ -348,11 +388,6 @@ async def run_analysis_pipeline(
             f"Selected {video_metadata.get('processing_tier', 'unknown')} processing tier",
             {
                 "processing_tier": video_metadata.get("processing_tier"),
-                "file_size_mb": video_metadata.get("file_size_mb"),
-                "source_width": video_metadata.get("source_width"),
-                "source_height": video_metadata.get("source_height"),
-                "video_fps": video_metadata.get("fps"),
-                "video_duration_seconds": video_metadata.get("duration_seconds"),
                 "quality_flags": quality_flags_from_video,
                 "manual_review_reason": video_metadata.get("manual_review_reason"),
             },
@@ -364,7 +399,7 @@ async def run_analysis_pipeline(
                 job_id=job_id,
                 stage_history=stage_history,
                 started_at=started_at,
-                stage_message="Manual review selected before AI processing",
+                stage_message="Manual review selected before frame extraction",
                 quality_flags=quality_flags_from_video or ["video_too_heavy_for_ai_processing"],
                 video_metadata=video_metadata,
                 error_message=(
@@ -373,6 +408,29 @@ async def run_analysis_pipeline(
                 ),
             )
             return
+
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "extracting_frames",
+            35,
+            "Sampling resized review frames",
+            {"processing_tier": video_metadata.get("processing_tier")},
+        )
+
+        extraction = extract_frames(
+            video_path,
+            video_upload_id=request.video_upload_id,
+            filename=getattr(request, "original_filename", None),
+            capture_source=getattr(request, "capture_source", None),
+            inspected_metadata=video_metadata,
+        )
+        frames = extraction.frames
+        video_metadata = extraction.metadata or {}
+        fps = float(video_metadata.get("fps") or 0.0)
+        total_duration = float(video_metadata.get("duration_seconds") or 0.0)
+        quality_flags_from_video = list(video_metadata.get("quality_flags") or [])
 
         if not frames:
             await send_manual_review_result(
@@ -400,7 +458,7 @@ async def run_analysis_pipeline(
             stage_history,
             job_id,
             "running",
-            "extracting_frames",
+            "frames_extracted",
             42,
             f"Extracted {len(frames)} review frames",
             {
@@ -446,6 +504,16 @@ async def run_analysis_pipeline(
             )
             return
 
+        # Optional temporal stabilisation of the sampled pose tracks
+        # (ENABLE_POSE_SMOOTHING): interpolate short gaps, drop single-frame
+        # outliers, smooth jitter. OFF by default; falls back to raw on error.
+        try:
+            from app.pose_postprocess import pose_smoothing_enabled, smooth_pose_results
+            if pose_smoothing_enabled():
+                pose_results = smooth_pose_results(pose_results)
+        except Exception as smooth_err:
+            logger.warning(f"[{request.video_upload_id}] pose smoothing skipped: {smooth_err}")
+
         frame_count_processed = len(pose_results)
         detected_frames = [r for r in pose_results if r.get("pose_detected")]
         detected_count = len(detected_frames)
@@ -457,9 +525,15 @@ async def run_analysis_pipeline(
         )
 
         detected_keypoints_count = 0.0
+        visible_landmarks_average = 0.0
         if detected_frames:
             detected_keypoints_count = round(
                 sum(r.get("keypoint_count", 0) for r in detected_frames)
+                / len(detected_frames),
+                1,
+            )
+            visible_landmarks_average = round(
+                sum(r.get("landmark_count_total", r.get("keypoint_count", 0)) for r in detected_frames)
                 / len(detected_frames),
                 1,
             )
@@ -468,13 +542,14 @@ async def run_analysis_pipeline(
             stage_history,
             job_id,
             "running",
-            "analysing_stroke",
-            75,
-            f"Running {request.stroke_type or 'swim'} stroke-specific checks",
+            "analysing_stroke_phases",
+            68,
+            f"Analysing {request.stroke_type or 'swim'} phases and relative 2D signals",
             {
                 "detected_pose_frames": detected_count,
                 "detection_ratio": round(detection_ratio, 3),
                 "detected_keypoints_count": detected_keypoints_count,
+                "visible_landmarks_average": visible_landmarks_average,
             },
         )
 
@@ -491,6 +566,21 @@ async def run_analysis_pipeline(
         analysis_mode = analysis_payload.get("analysis_mode", "placeholder")
         real_pose_detected = bool(analysis_payload.get("real_pose_detected"))
 
+        temporal_metrics = analysis_payload.get("temporal_metrics") or {}
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "generating_findings",
+            78,
+            "Applying sustained-evidence checks to coach-draft findings",
+            {
+                "temporal_sample_count": temporal_metrics.get("usable_sample_count", 0),
+                "phase_segment_count": len(temporal_metrics.get("phase_segments") or []),
+                "candidate_finding_count": len(analysis_payload.get("findings") or []),
+            },
+        )
+
         pose_reliability = classify_pose_reliability(
             analysis_mode=analysis_mode,
             real_pose_detected=real_pose_detected,
@@ -506,7 +596,11 @@ async def run_analysis_pipeline(
             total_duration=total_duration,
             camera_angle=request.camera_angle or "",
         )
-        quality_flags = list(dict.fromkeys([*quality_flags_from_video, *quality_flags]))
+        quality_flags = list(dict.fromkeys([
+            *quality_flags_from_video,
+            *quality_flags,
+            *(temporal_metrics.get("quality_flags") or []),
+        ]))
 
         recommended_next_action = get_recommended_next_action(
             analysis_mode=analysis_mode,
@@ -540,6 +634,19 @@ async def run_analysis_pipeline(
             recommended_next_action = "manual_review_recommended"
 
         processing_duration = round(time.time() - started_at, 2)
+        processing_telemetry = {
+            "frames_requested": video_metadata.get("requested_frame_count", frame_count_processed),
+            "frames_sampled": frame_count_processed,
+            "frames_with_pose": detected_count,
+            "pose_frame_failures": sum(1 for result in pose_results if result.get("error")),
+            "pose_detection_rate": round(detection_ratio, 4),
+            "average_core_keypoints": detected_keypoints_count,
+            "average_visible_landmarks": visible_landmarks_average,
+            "fallback_triggered": not should_allow_ai_findings,
+            "processing_tier": video_metadata.get("processing_tier"),
+            "failed_frame_reads": video_metadata.get("failed_frame_reads", 0),
+            "quality_flags": quality_flags,
+        }
 
         analysis_payload.update({
             "job_id": job_id,
@@ -564,6 +671,7 @@ async def run_analysis_pipeline(
             "processed_height": video_metadata.get("processed_height"),
             "processing_window_seconds": video_metadata.get("processing_window_seconds"),
             "sampled_frame_count": video_metadata.get("sampled_frame_count", frame_count_processed),
+            "processing_telemetry": processing_telemetry,
         })
 
         # Estimated anthropometric drag is an INTERNAL PILOT prototype, OFF by
@@ -690,6 +798,17 @@ async def run_analysis_pipeline(
     finally:
         if video_path:
             cleanup_temp_file(video_path)
+
+
+@app.on_event("startup")
+async def start_durable_queue() -> None:
+    if DURABLE_QUEUE.requested:
+        await DURABLE_QUEUE.start(run_analysis_pipeline)
+
+
+@app.on_event("shutdown")
+async def stop_durable_queue() -> None:
+    await DURABLE_QUEUE.stop()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -829,6 +948,19 @@ async def send_manual_review_result(
         "processed_height": metadata.get("processed_height"),
         "processing_window_seconds": metadata.get("processing_window_seconds"),
         "sampled_frame_count": metadata.get("sampled_frame_count", 0) or 0,
+        "processing_telemetry": {
+            "frames_requested": metadata.get("requested_frame_count", 0) or 0,
+            "frames_sampled": metadata.get("sampled_frame_count", 0) or 0,
+            "frames_with_pose": 0,
+            "pose_frame_failures": 0,
+            "pose_detection_rate": 0,
+            "average_core_keypoints": 0,
+            "average_visible_landmarks": 0,
+            "fallback_triggered": True,
+            "processing_tier": metadata.get("processing_tier"),
+            "failed_frame_reads": metadata.get("failed_frame_reads", 0) or 0,
+            "quality_flags": flags,
+        },
     }
 
     callback_ok = await send_callback(request.callback_url, payload)

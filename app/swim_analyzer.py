@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from app.pose_estimator import get_midpoint, horizontal_distance, vertical_distance
+from app.findings_robust import robust_findings_enabled, robust_peak
+from app.temporal_metrics import build_temporal_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +164,13 @@ def analyze_pose_data(
         "key_frames": [],
         "error_message": None,
     }
+
+    temporal_analysis = build_temporal_analysis(
+        detected_frames,
+        fps if fps > 0 else 30.0,
+        normalized_stroke,
+    )
+    base["temporal_metrics"] = temporal_analysis
 
     if detection_count < MIN_FRAMES_FOR_ANALYSIS or detection_ratio < MIN_DETECTION_RATIO:
         logger.warning(
@@ -765,6 +774,11 @@ def _butterfly_rhythm_signal(frames: List[Dict[str, Any]], fps: float) -> Option
 def _series_peak(values: List[Dict[str, float]]) -> Optional[Dict[str, Any]]:
     if not values:
         return None
+
+    # Conservative mode (ROBUST_FINDINGS): suppress one-off spikes and report a
+    # high-percentile strength instead of the single max frame.
+    if robust_findings_enabled():
+        return robust_peak(values)
 
     peak = max(values, key=lambda item: item["value"])
     return {

@@ -137,15 +137,19 @@ def _midpoint(a: Tuple[float, float], b: Tuple[float, float]) -> Tuple[float, fl
 
 
 def estimate_scale(pose_results: List[Dict[str, Any]], height_m: float,
-                   min_vis: float = 0.0) -> Optional[Dict[str, Any]]:
+                   min_vis: float = 0.0,
+                   scale_percentile: float = 95.0) -> Optional[Dict[str, Any]]:
     """
-    Step 6. metres-per-normalised-unit from the most-extended frame.
+    Step 6. metres-per-normalised-unit from the most-extended frames.
 
-    body length (units) = max over frames of |nose - ankle_midpoint|, using only
-    frames where nose + both ankles are present. scale = height_m / that length.
+    body length (units) = a high PERCENTILE of |nose - ankle_midpoint| over frames
+    where nose + both ankles are present. Using a percentile instead of the
+    single max is robust: one mis-detected ankle that lands far away would
+    otherwise inflate the body length -> shrink the scale -> understate real
+    displacement, velocity, and drag. scale = height_m / body_length_units.
     """
-    best_len = 0.0
-    best_frame: Optional[int] = None
+    dists: List[float] = []
+    frames: List[int] = []
     for i, fr in enumerate(pose_results):
         head = _landmark(fr, HEAD, min_vis)
         al = _landmark(fr, ANKLE_L, min_vis)
@@ -153,17 +157,52 @@ def estimate_scale(pose_results: List[Dict[str, Any]], height_m: float,
         if head is None or al is None or ar is None:
             continue
         amid = _midpoint(al, ar)
-        d = float(np.hypot(head[0] - amid[0], head[1] - amid[1]))
-        if d > best_len:
-            best_len = d
-            best_frame = int(fr.get("frame_idx", i))
-    if best_len <= 1e-6:
+        dists.append(float(np.hypot(head[0] - amid[0], head[1] - amid[1])))
+        frames.append(int(fr.get("frame_idx", i)))
+
+    if not dists:
         return None
+    arr = np.asarray(dists, dtype=float)
+    body_len_units = float(np.percentile(arr, scale_percentile))
+    if body_len_units <= 1e-6:
+        return None
+    ref_i = int(np.argmin(np.abs(arr - body_len_units)))
     return {
-        "scale_m_per_unit": height_m / best_len,
-        "body_length_units": best_len,
-        "extended_frame": best_frame,
+        "scale_m_per_unit": height_m / body_len_units,
+        "body_length_units": body_len_units,
+        "extended_frame": frames[ref_i],
+        "scale_frames": len(dists),
     }
+
+
+# ---------------------------------------------------------------------------
+# Experimental near-surface wave drag (documented helper; NOT auto-applied).
+# Wave drag rises sharply as a swimmer nears the surface. The Froude formula
+# below is the right model, but it needs the swimmer's DEPTH below the surface,
+# which a single monocular camera cannot recover reliably. It is provided so the
+# math is ready once a depth/calibration source exists; analyse_clip does not
+# call it, and ENABLE_WAVE_DRAG only signals intent.
+# ---------------------------------------------------------------------------
+def wave_drag_enabled(env: Optional[Dict[str, str]] = None) -> bool:
+    src = os.environ if env is None else env
+    return str(src.get("ENABLE_WAVE_DRAG", "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def froude_wave_factor(velocity_m_s: float, trunk_len_m: float,
+                       depth_over_trunk: float = 0.3, alpha: float = 2.45,
+                       g: float = 9.81, cap: float = 1.6) -> float:
+    """
+    Drag multiplier from the hull Froude number:
+        Fr     = v / sqrt(g * L_trunk)
+        factor = 1 + alpha * exp(-depth/L_trunk) * Fr^2     (capped)
+    Returns 1.0 for non-positive inputs. EXPERIMENTAL: depth_over_trunk is an
+    assumption, not a measurement.
+    """
+    if velocity_m_s <= 0 or trunk_len_m <= 0:
+        return 1.0
+    fr = velocity_m_s / float(np.sqrt(g * trunk_len_m))
+    factor = 1.0 + alpha * float(np.exp(-depth_over_trunk)) * (fr * fr)
+    return float(min(cap, max(1.0, factor)))
 
 
 def analyse_clip(pose_results: List[Dict[str, Any]],
@@ -173,6 +212,7 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
                  mass_kg: Optional[float],
                  stroke: str = "freestyle",
                  lane_axis: str = "x",
+                 scale_m_per_unit_override: Optional[float] = None,
                  min_visibility: float = 0.0,
                  smooth_seconds_accel: float = 0.8) -> Optional[Dict[str, Any]]:
     """
@@ -197,12 +237,20 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
     pose_key = _pose_key(stroke)
     model = AnthropometricDragModel(swimmer, pose=pose_key)
 
-    # Step 6: scale from the most-extended frame.
-    scale = estimate_scale(pose_results, swimmer.height_m, min_visibility)
-    if scale is None:
-        logger.info("estimated_drag skipped: no frame with nose + both ankles to scale from")
-        return None
-    s = scale["scale_m_per_unit"]
+    # Step 6: scale -- a calibration override (e.g. from a known pool marking)
+    # if supplied, else the robust monocular estimate.
+    if scale_m_per_unit_override and scale_m_per_unit_override > 0:
+        s = float(scale_m_per_unit_override)
+        scale = {"scale_m_per_unit": s, "body_length_units": None,
+                 "extended_frame": None, "scale_frames": 0}
+        scale_basis = "calibrated"
+    else:
+        scale = estimate_scale(pose_results, swimmer.height_m, min_visibility)
+        if scale is None:
+            logger.info("estimated_drag skipped: no frame with nose + both ankles to scale from")
+            return None
+        s = scale["scale_m_per_unit"]
+        scale_basis = "monocular-anthropometric"
 
     # Step 7: hip-midpoint forward track (only frames where both hips are present).
     times: List[float] = []
@@ -255,10 +303,17 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
     prop = np.array([r.propulsive_force_n for r in res_i])
     net = np.array([r.net_force_n for r in res_i])
 
+    # Intra-cycle velocity character: speed lost at the slowest point vs the
+    # fastest. A low ratio signals a 'dead spot' in the stroke.
+    v_arr = np.asarray(vel_i, dtype=float)
+    v_max = float(np.max(v_arr)) if v_arr.size else 0.0
+    v_min = float(np.min(v_arr)) if v_arr.size else 0.0
+    velocity_drop_ratio = (v_min / v_max) if v_max > 0 else 0.0
+
     # Step 9: drag + drag-to-weight always; net/propulsive only when confident.
     payload: Dict[str, Any] = {
         "label": "estimated_drag",
-        "basis": "estimated (monocular anthropometric scale from MediaPipe pose) -- not measured",
+        "basis": f"estimated ({scale_basis} scale from MediaPipe pose) -- not measured",
         "pose_source": "mediapipe_pose",
         "stroke": pose_key,
         "confidence_low": bool(confidence_low),
@@ -270,7 +325,9 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
             "mean_drag_force_n": round(float(np.mean(drag)), 2),
             "peak_drag_force_n": round(float(np.max(drag)), 2),
             "mean_drag_to_weight_ratio": round(float(np.mean(dwr)), 4),
-            "peak_velocity_m_s": round(float(np.max(vel_i)), 3),
+            "peak_velocity_m_s": round(v_max, 3),
+            "min_velocity_m_s": round(v_min, 3),
+            "velocity_drop_ratio": round(velocity_drop_ratio, 3),
         },
         "series": {
             "timestamp_s": [round(float(x), 4) for x in t_i],

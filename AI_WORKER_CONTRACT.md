@@ -82,7 +82,33 @@ The endpoint must return quickly with `202 Accepted`. Heavy processing runs in t
 
 ### `GET /jobs/{job_id}`
 
-Returns the in-memory worker job snapshot for local/debug visibility. This is not durable storage and must not be treated as the canonical job record.
+Returns the worker job snapshot for local/debug visibility. With the default
+configuration this remains in memory. When the optional durable queue is
+enabled, the sanitized status snapshot is also read from Redis. Supabase remains
+the canonical application job record.
+
+## Optional Durable Redis Queue
+
+The default execution path remains FastAPI background tasks. Set both:
+
+```text
+ENABLE_DURABLE_QUEUE=true
+REDIS_URL=<private Redis connection URL>
+```
+
+to use Redis Streams with a consumer group. Accepted jobs are stored in the
+stream, unacknowledged jobs remain pending, and stale pending jobs are reclaimed
+after `AI_JOB_LEASE_MS` (default five minutes). Completed messages are
+acknowledged and deleted. The `/process-video` accepted response is unchanged.
+
+The private queue payload contains the short-lived signed URL because the worker
+needs it to download the video after dequeue. Redis must therefore be private,
+encrypted in transit, access-controlled, and treated as sensitive
+infrastructure. Signed URLs are never stored in the sanitized job-status key,
+logs, callbacks, or reports.
+
+Do not enable this flag until Redis is provisioned and restart/reclaim behavior
+has been tested in a staging worker.
 
 ## `/process-video` vs `/analyse`
 
@@ -183,6 +209,25 @@ The callback may include:
 - `processed_height`
 - `processing_window_seconds`
 - `sampled_frame_count`
+- `processing_telemetry`
+- `temporal_metrics`
+
+`processing_telemetry` contains sanitized operational measurements such as
+requested/sample frame counts, pose detection rate, average core keypoints,
+average visible landmarks, failed frame reads, fallback state, and quality
+flags. It never contains video URLs, tokens, private paths, or athlete profile
+data.
+
+`temporal_metrics` contains heuristic relative-2D image-space summaries and
+phase segments. These are not calibrated 3D angles, distances, velocities, or
+hydrodynamic measurements and must not be presented as such.
+
+## Internal Pose Landmark Schema
+
+The worker retains all 33 MediaPipe Pose landmarks internally, including face,
+hand, heel, and foot-index points when visible. The stable `keypoint_count`
+quality gate still counts only the original 15 core body landmarks, so richer
+landmark availability cannot make weak pose evidence pass the gate by itself.
 
 ## `estimated_drag` (internal pilot prototype — disabled by default)
 
@@ -215,6 +260,26 @@ Included only when `confidence_low` is `false`:
 
 The block never contains swimmer height, mass, or any identifying profile value.
 
+## Tuning & Pilot Flags (all default OFF / conservative)
+
+These environment flags gate optional worker upgrades. With none set, the worker
+behaves exactly as `pose-mvp-0.5` did. Enable one at a time and compare against
+the baseline harness (`scripts/evaluate_baseline.py`).
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `POSE_MODEL_COMPLEXITY` | `0` | MediaPipe BlazePose complexity (0/1/2). `1` markedly improves keypoint accuracy/stability; slower per frame. |
+| `ENABLE_CLAHE` | `false` | CLAHE contrast enhancement before pose (helps underwater/low-contrast). `CLAHE_CLIP_LIMIT` (2.0), `CLAHE_TILE` (8) tune it. |
+| `ENABLE_POSE_SMOOTHING` | `false` | Temporal stabilisation of sampled tracks: short-gap interpolation, single-frame outlier removal, jitter smoothing. Interpolated points do not inflate the detection count. |
+| `ROBUST_FINDINGS` | `false` | Draft findings must be sustained across frames (not a single spike); strength reported as a percentile. Fewer false positives. |
+| `SEQUENTIAL_FRAME_READ` | `false` | Decode the processing window in one forward pass instead of per-frame seeks. Faster on long-GOP video; no accuracy change. |
+| `ENABLE_ESTIMATED_DRAG` | `false` | Pilot anthropometric drag block (see above). Requires `swimmer_height_cm` + `swimmer_mass_kg`. |
+| `ENABLE_WAVE_DRAG` | `false` | Experimental near-surface Froude wave-drag. Helper math only — NOT auto-applied, because reliable depth needs calibration a monocular camera lacks. |
+
+All of these preserve the `/process-video` contract, the quality gate, and the
+manual-review fallback. Each is wrapped so a failure falls back to current
+behaviour rather than breaking analysis.
+
 ## Callback Statuses
 
 Expected final callback statuses:
@@ -229,11 +294,14 @@ Progress/status-stage values may include:
 - `running`
 - `downloading_video`
 - `downloaded_video`
+- `reading_video_metadata`
 - `metadata_read`
 - `processing_tier_selected`
 - `extracting_frames`
+- `frames_extracted`
 - `running_pose_detection`
-- `analysing_stroke`
+- `analysing_stroke_phases`
+- `generating_findings`
 - `generating_outputs`
 - `callback_sending`
 - `completed`
