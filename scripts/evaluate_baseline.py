@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.pose_estimator import run_pose_estimation  # noqa: E402
+from app.pose_postprocess import pose_smoothing_enabled, smooth_pose_results  # noqa: E402
 from app.swim_analyzer import AI_ENGINE_VERSION, analyze_pose_data  # noqa: E402
 from app.video_processor import extract_frames  # noqa: E402
 
@@ -50,6 +51,8 @@ def evaluate_video(video_path: Path, stroke: str, camera_angle: str) -> Dict[str
 
     if frames:
         pose_results = run_pose_estimation(frames)
+        if pose_smoothing_enabled():
+            pose_results = smooth_pose_results(pose_results)
         analysis = analyze_pose_data(
             pose_results=pose_results,
             frames=frames,

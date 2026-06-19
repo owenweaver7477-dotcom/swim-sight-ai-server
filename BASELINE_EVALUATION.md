@@ -22,6 +22,18 @@ Use the baseline harness to record:
 
 These metrics give future upgrades something honest to beat.
 
+## Combined Upgrade Test Runner
+
+Run every safe local upgrade check, followed by a compile check:
+
+```bash
+python3 scripts/test_upgrades.py
+```
+
+The runner executes fixture validation, worker contract tests, drag integration,
+pose post-processing, robust findings, and Python compilation in order. It does
+not hide failed checks. Missing worker dependencies are listed before testing.
+
 ## Fixture Validation
 
 Run:
@@ -87,6 +99,49 @@ If no clips exist, the script exits cleanly with:
 ```text
 No sample clips found. Add local clips to samples/videos/ to run baseline evaluation.
 ```
+
+## Compare Default-Off Upgrade Flags
+
+Put local sample clips in `samples/videos/`, then run:
+
+```bash
+python3 scripts/compare_upgrade_flags.py \
+  --stroke Breaststroke \
+  --camera-angle Side
+```
+
+The comparison runs each clip in a fresh Python process using:
+
+1. baseline/default flags
+2. `ENABLE_CLAHE=true`
+3. `ENABLE_POSE_SMOOTHING=true`
+4. `POSE_MODEL_COMPLEXITY=1`
+5. `ROBUST_FINDINGS=true`
+6. `SEQUENTIAL_FRAME_READ=true`
+7. all safe flags together, excluding estimated drag
+
+Reports are written locally to:
+
+```text
+baseline_reports/upgrade_comparison_<timestamp>.json
+```
+
+Each result records the clip, stroke, camera angle, flags, processing time,
+sampled and detected frames, detection rate, average keypoints, fallback state,
+finding count, and quality flags. `ENABLE_ESTIMATED_DRAG` is explicitly false
+for every standard comparison.
+
+Test one change at a time before trusting the combined run. A practical order is:
+
+1. `SEQUENTIAL_FRAME_READ` for decode reliability and processing time
+2. `ENABLE_CLAHE` for low-contrast pose detection
+3. `ENABLE_POSE_SMOOTHING` for landmark stability
+4. `POSE_MODEL_COMPLEXITY=1` for accuracy versus processing cost
+5. `ROBUST_FINDINGS` for finding precision and suppression behaviour
+
+Do not enable every flag in production merely because tests pass. Compare real,
+representative swim clips first and enable only upgrades that improve useful pose
+evidence or reliability without unacceptable processing cost or extra fallbacks.
 
 ## Git Safety
 
