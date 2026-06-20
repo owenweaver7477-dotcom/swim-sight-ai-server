@@ -87,9 +87,29 @@ train_cfg = dict(max_epochs=60, val_interval=10)
 optim_wrapper = dict(optimizer=dict(lr=1e-4))   # low LR for finetuning
 ```
 
+### Run training on a GPU (do not run on the production worker)
+
+Prepare the dataset locally first, then run these commands inside an MMPose GPU
+environment. Replace the example paths with the checked-out repositories and
+licensed local data locations:
+
 ```bash
-python tools/train.py configs/rtmpose-m_swimxyz.py
+python3 scripts/swimxyz_to_mmpose.py \
+  --joints /data/swimxyz/freestyle/joints.npy \
+  --images-dir /data/swimxyz/freestyle/images \
+  --output-dir /data/swimxyz/annotations \
+  --stroke freestyle
+
+cd /workspace/mmpose
+SWIMXYZ_DATA_ROOT=/data/swimxyz/ \
+SWIMXYZ_STROKE=freestyle \
+python tools/train.py \
+  /workspace/swim-sight-ai-server/configs/rtmpose-m_swimxyz.py \
+  --work-dir /workspace/work_dirs/rtmpose-m_swimxyz-freestyle
 ```
+
+Do not run training until the SwimXYZ files have been obtained under their
+CC-BY-4.0 terms and the attribution below is retained.
 
 ## Phase 5 - Evaluate
 
@@ -101,10 +121,15 @@ python tools/train.py configs/rtmpose-m_swimxyz.py
 ## Phase 6 - Export to ONNX
 
 ```bash
+cd /workspace/mmdeploy
 python tools/deploy.py \
-  configs/mmdeploy/pose-detection_onnxruntime_static.py \
-  configs/rtmpose-m_swimxyz.py work_dirs/.../best.pth \
-  demo.jpg --work-dir export/   # -> end2end.onnx
+  configs/mmpose/pose-detection_simcc_onnxruntime_dynamic.py \
+  /workspace/swim-sight-ai-server/configs/rtmpose-m_swimxyz.py \
+  /workspace/work_dirs/rtmpose-m_swimxyz-freestyle/best_coco_AP_epoch_*.pth \
+  /data/swimxyz/freestyle/images/example.jpg \
+  --work-dir /workspace/export/rtmpose-m-swimxyz \
+  --device cuda:0 \
+  --dump-info
 ```
 
 Quantise to int8 for CPU if latency is tight. Keep the `.onnx` out of git (large);
@@ -112,13 +137,13 @@ store it on S3/Render disk and load at startup.
 
 ## Phase 7 - Integrate behind POSE_BACKEND (default OFF)
 
-1. Add `app/pose_onnx.py` with `run_onnx_pose(frames) -> pose_results`:
+1. `app/pose_onnx.py` provides `run_onnx_pose(frames) -> pose_results`:
    - run ONNX Runtime on each frame,
    - take the 17 COCO keypoints + scores,
    - emit the worker's landmark dict (reuse `swimxyz_adapter.COCO17_TO_WORKER` for
      names; set `visibility` from the model's per-keypoint score),
    - keep the exact same dict shape as `run_pose_estimation`.
-2. Flip the single call in `main.py`:
+2. The single call in `main.py` dispatches through the backend boundary:
 
    ```python
    # from:

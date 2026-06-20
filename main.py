@@ -13,7 +13,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException, status
 
 from app.models import VideoProcessingRequest, HealthResponse
 from app.video_processor import download_video, inspect_video, extract_frames, cleanup_temp_file
-from app.pose_estimator import run_pose_estimation
+from app.pose_backends import run_pose_estimation_backend
 from app.swim_analyzer import analyze_pose_data
 from app.callback_client import send_callback
 from app.utils import build_error_callback
@@ -486,7 +486,7 @@ async def run_analysis_pipeline(
             },
         )
 
-        pose_results = run_pose_estimation(frames)
+        pose_results = run_pose_estimation_backend(frames)
 
         if not pose_results:
             await send_manual_review_result(

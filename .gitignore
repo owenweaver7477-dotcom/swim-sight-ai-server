@@ -9,3 +9,8 @@ samples/videos/*
 samples/labels.local.json
 baseline_reports/*
 !baseline_reports/.gitkeep
+data/swimxyz/
+work_dirs/
+export/
+*.onnx
+*.pth

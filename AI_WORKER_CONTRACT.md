@@ -280,6 +280,27 @@ All of these preserve the `/process-video` contract, the quality gate, and the
 manual-review fallback. Each is wrapped so a failure falls back to current
 behaviour rather than breaking analysis.
 
+## Optional Pose Backend
+
+The pose detector is selected internally without changing the `/process-video`
+request or callback shape:
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `POSE_BACKEND` | `mediapipe` | `mediapipe` keeps the current production detector. `onnx` selects the optional swim-specific MMDeploy model. |
+| `POSE_ONNX_PATH` | unset | Local path to an exported RTMPose/ViTPose MMDeploy end-to-end `.onnx` file. Required only when `POSE_BACKEND=onnx`. |
+
+The ONNX model may emit decoded COCO-17 keypoint coordinates plus scores or the
+standard RTMPose SimCC x/y outputs. The adapter maps decoded points through the
+existing `COCO17_TO_WORKER` mapping and preserves the worker's normalized
+landmark contract. `onnxruntime` is an optional deployment dependency and is
+imported only when the ONNX backend is selected.
+
+Do not enable the ONNX backend until the model has beaten the MediaPipe baseline
+on labelled, representative swim clips. If the model is missing or incompatible,
+the pipeline sends its normal protected error callback; it does not alter the
+public contract or bypass manual coach review.
+
 ## Callback Statuses
 
 Expected final callback statuses:
