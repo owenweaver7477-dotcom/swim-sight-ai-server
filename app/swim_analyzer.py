@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from app.pose_estimator import get_midpoint, horizontal_distance, vertical_distance
+from app.pose_landmarks import get_midpoint, horizontal_distance, vertical_distance
 from app.findings_robust import robust_findings_enabled, robust_peak
 from app.temporal_metrics import build_temporal_analysis
 

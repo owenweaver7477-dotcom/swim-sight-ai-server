@@ -26,6 +26,7 @@ SAFE_TESTS: Sequence[Tuple[str, Sequence[str]]] = (
     ("Drag integration", ("scripts/test_drag_integration.py",)),
     ("Pose postprocess", ("scripts/test_pose_postprocess.py",)),
     ("Robust findings", ("scripts/test_findings_robust.py",)),
+    ("Synthetic pose evaluation", ("scripts/test_synth_eval.py",)),
     ("Temporal metrics", ("scripts/test_temporal_metrics.py",)),
     ("Labelled evaluation", ("scripts/test_labelled_evaluation.py",)),
     ("Durable queue configuration", ("scripts/test_durable_queue.py",)),

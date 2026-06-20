@@ -54,9 +54,38 @@ python3 scripts/test_upgrades.py
 ```
 
 The runner executes fixture validation, worker contract tests, drag integration,
-pose post-processing, robust findings, temporal metrics, labelled-evaluation
-logic, durable-queue configuration, and Python compilation in order. It does not
-hide failed checks. Missing worker dependencies are listed before testing.
+pose post-processing, robust findings, synthetic pose evaluation, temporal
+metrics, labelled-evaluation logic, durable-queue configuration, and Python
+compilation in order. It does not hide failed checks. Missing worker dependencies
+are listed before testing.
+
+## Synthetic Pose Logic Checks
+
+Run the footage-free synthetic harness directly:
+
+```bash
+python3 scripts/synth_eval.py --fault none
+python3 scripts/synth_eval.py --fault hip_drop
+python3 scripts/synth_eval.py --fault head_lift
+python3 scripts/synth_eval.py --fault dropped_elbow
+python3 scripts/synth_eval.py --inject-noise --compare-flag ENABLE_POSE_SMOOTHING
+```
+
+Run its assertions with:
+
+```bash
+python3 scripts/test_synth_eval.py
+```
+
+These tests exercise downstream pose smoothing and finding logic without video
+or MediaPipe. They are logic checks only. They do not measure pose-detection
+quality, validate findings on real swimmers, or prove product accuracy.
+
+Real Swim Pro-exported clips are still required to evaluate detection quality,
+fallback behaviour, false positives, and missed coach-observed faults. Stock
+footage may help with early detection testing only when its licence permits this
+use. Neither synthetic poses nor stock footage should be presented as
+coach-validated product evidence.
 
 ## Fixture Validation
 

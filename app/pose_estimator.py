@@ -46,27 +46,16 @@ LANDMARK = {
     "right_foot_index": 32,
 }
 
-# Preserve the existing quality-gate semantics. Richer face/hand/foot landmarks
-# are available internally, but they do not inflate the core keypoint count.
-CORE_LANDMARK_NAMES = {
-    "nose",
-    "left_ear",
-    "right_ear",
-    "left_shoulder",
-    "right_shoulder",
-    "left_elbow",
-    "right_elbow",
-    "left_wrist",
-    "right_wrist",
-    "left_hip",
-    "right_hip",
-    "left_knee",
-    "right_knee",
-    "left_ankle",
-    "right_ankle",
-}
-
-MIN_VISIBILITY = 0.45
+# Pure constants + geometry live in pose_landmarks so the analysis stack stays
+# importable without mediapipe/cv2. Re-exported here so existing
+# `from app.pose_estimator import ...` call sites keep working unchanged.
+from app.pose_landmarks import (  # noqa: E402
+    CORE_LANDMARK_NAMES,
+    MIN_VISIBILITY,
+    get_midpoint,
+    vertical_distance,
+    horizontal_distance,
+)
 
 
 def _model_complexity() -> int:
@@ -197,16 +186,5 @@ def _process_frame(pose, frame_rgb, original_frame_idx: int) -> Dict[str, Any]:
     }
 
 
-def get_midpoint(lm_a: Dict, lm_b: Dict) -> Dict:
-    return {
-        "x": (lm_a["x"] + lm_b["x"]) / 2,
-        "y": (lm_a["y"] + lm_b["y"]) / 2,
-    }
-
-
-def vertical_distance(point_a: Dict, point_b: Dict) -> float:
-    return point_b["y"] - point_a["y"]
-
-
-def horizontal_distance(point_a: Dict, point_b: Dict) -> float:
-    return abs(point_a["x"] - point_b["x"])
+# get_midpoint / vertical_distance / horizontal_distance are imported from
+# app.pose_landmarks at the top and re-exported for backwards compatibility.

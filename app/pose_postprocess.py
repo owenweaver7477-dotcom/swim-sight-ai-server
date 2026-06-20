@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from app.pose_estimator import CORE_LANDMARK_NAMES
+from app.pose_landmarks import CORE_LANDMARK_NAMES
 
 _TRUTHY = {"1", "true", "yes", "on"}
 DETECT_MIN_KEYPOINTS = 4      # matches pose_estimator pose_detected rule
