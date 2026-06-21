@@ -1,0 +1,33 @@
+{
+  "job_id": "synthetic-unsafe-job",
+  "video_upload_id": "synthetic-unsafe-video",
+  "analysis_mode": "real_pose",
+  "real_pose_detected": true,
+  "detection_ratio": 0.82,
+  "frame_count_processed": 48,
+  "findings": [
+    {
+      "finding_title": "Guaranteed correction from measured drag",
+      "severity": "high",
+      "confidence": 0.99,
+      "landmarks": {
+        "synthetic_point": {"x": 0.1, "y": 0.2}
+      },
+      "frames": [[0.1, 0.2], [0.2, 0.3]]
+    }
+  ],
+  "technical_summary": "Perfect analysis with guaranteed improvement.",
+  "signed_video_url": "https://signed-url-redacted.invalid/private.mp4?token=synthetic-only",
+  "file_path": "/synthetic/private/video.mp4",
+  "swimmer_name": "Synthetic Swimmer",
+  "height_cm": 180,
+  "mass_kg": 75,
+  "estimated_drag": {
+    "label": "drag output",
+    "basis": "measured drag"
+  },
+  "phase_analysis": {
+    "phase_analysis_enabled": true,
+    "cycles": []
+  }
+}

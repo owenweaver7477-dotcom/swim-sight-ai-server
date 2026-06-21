@@ -1,0 +1,36 @@
+{
+  "job_id": "synthetic-qa-job",
+  "server_job_id": "synthetic-qa-job",
+  "video_upload_id": "synthetic-video-record",
+  "engine": "pose-mvp-0.5",
+  "status": "completed",
+  "analysis_mode": "real_pose",
+  "real_pose_detected": true,
+  "findings": [
+    {
+      "finding_id": "body_line_qa_001",
+      "finding_title": "Body Line Needs Coach Review",
+      "finding_description": "Pose evidence suggests a body-line change during extension.",
+      "severity": "moderate",
+      "confidence": 0.72,
+      "phase": "extension",
+      "coach_review_required": true
+    }
+  ],
+  "technical_summary": "AI-assisted draft findings are ready for coach review.",
+  "detection_ratio": 0.74,
+  "frame_count_processed": 54,
+  "detected_pose_frames": 40,
+  "detected_keypoints_count": 12.2,
+  "pose_reliability": "reliable",
+  "processing_tier": "standard_ai",
+  "stage_history": [
+    {
+      "stage": "completed",
+      "status": "completed",
+      "progress_percent": 100,
+      "message": "Pose-assisted analysis completed"
+    }
+  ],
+  "quality_flags": []
+}

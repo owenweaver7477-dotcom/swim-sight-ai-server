@@ -36,6 +36,7 @@ SAFE_TESTS: Sequence[Tuple[str, Sequence[str]]] = (
     ("Phase analysis", ("scripts/test_phase_analysis_core.py",)),
     ("Known-distance calibration", ("scripts/test_calibration_core.py",)),
     ("Coach feedback evaluation", ("scripts/test_coach_feedback.py",)),
+    ("Analysis QA and pilot readiness", ("scripts/test_analysis_quality.py",)),
     ("MMPose conversion self-test", ("scripts/swimxyz_to_mmpose.py", "--self-test")),
     ("Temporal metrics", ("scripts/test_temporal_metrics.py",)),
     ("Labelled evaluation", ("scripts/test_labelled_evaluation.py",)),

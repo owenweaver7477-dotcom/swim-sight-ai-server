@@ -24,6 +24,20 @@ Coach feedback ingestion is not a production worker route. Phase 5 provides a
 local privacy-safe JSONL evaluation contract only; no automatic model training
 or production update occurs.
 
+## Internal QA / Pilot Readiness
+
+`app.analysis_quality` and the local QA scripts inspect worker payloads without
+changing the `/process-video` request, accepted response, or callback contract.
+QA summaries are internal safety checks, not user-facing model-performance or
+accuracy claims.
+
+Coach-review safety allows privacy-safe AI-assisted drafts and internal
+telemetry. Public-report safety is stricter: internal IDs/telemetry,
+unapproved findings, raw pose/frame data, private paths/URLs, profile/identity
+data, and experimental blocks are rejected. A raw callback is therefore not a
+public report. Coach approval and the app's shared-report whitelist remain the
+source of truth.
+
 ## Current Routes
 
 ### `GET /`

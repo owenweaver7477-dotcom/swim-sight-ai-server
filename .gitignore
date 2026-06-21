@@ -17,3 +17,7 @@ export/
 *.pth
 baseline_data/
 coach_feedback_exports/
+pilot_reports/
+qa_reports/
+*.mp4
+*.webm
