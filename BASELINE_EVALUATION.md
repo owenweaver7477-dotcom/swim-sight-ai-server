@@ -4,12 +4,13 @@ Phase 15C adds script-based contract tests and a local baseline harness for the 
 
 This is not a model upgrade. It protects the current worker contract before future RTMPose, CLAHE, Kalman smoothing, ONNX, or other AI upgrades.
 
-## Pose Accuracy Baseline — MediaPipe vs SwimXYZ ground truth (Roadmap Phase 1)
+## Pose Evaluation Baseline — MediaPipe vs SwimXYZ ground truth (Roadmap Phase 1)
 
-This is the honest accuracy number the roadmap calls for: how well the CURRENT pose
-backend (MediaPipe, `POSE_BACKEND` unset) locates joints on real swimming frames,
-scored against SwimXYZ synthetic ground truth. Every later pose upgrade (RTMPose /
-ViTPose ONNX) must beat it.
+This is the technical baseline the roadmap calls for: how the current pose backend
+(MediaPipe, `POSE_BACKEND` unset) compares with labelled SwimXYZ synthetic swimming
+frames. It is an evaluation floor, not a public product or coaching claim. Future
+RTMPose/ViTPose ONNX candidates must improve it on representative evaluation data
+before they are considered for production.
 
 **Prepared sequence** (Breaststroke, side-above-water view):
 `Side_above_water/Swimmer_Skin_0,25_Muscle_2/Water_Quantity_0,25_Height_0,6/Lighting_rotx_140_roty_280/Speed_3/position_1,75`
@@ -25,7 +26,7 @@ ground truth is upside-down and the score is meaningless. This is now built into
 `.npy` already has the flip applied — verified by overlaying the skeleton on the real
 frames (head/shoulders track the swimmer across the whole pass).
 
-**Run it** (needs the worker venv with `mediapipe` + `opencv`):
+**Run it** (needs the worker environment with `mediapipe` and OpenCV):
 
 ```bash
 python3 scripts/measure_pose_baseline.py \
@@ -34,16 +35,58 @@ python3 scripts/measure_pose_baseline.py \
   --fps 60
 ```
 
-Paste the printed JSON into this table:
+The command prints a concise JSON summary and writes a dated JSON report plus a
+Markdown report to `baseline_reports/`. Those generated reports and all
+`baseline_data/` inputs are ignored by Git.
 
-| date | backend | frames | mean_error (px) | PCK@0.05 | recall |
-| --- | --- | --- | --- | --- | --- |
-| _run it_ | mediapipe | 301 | _?_ | _?_ | _?_ |
+The same prepared-folder run is also supported:
 
-**Read it honestly.** PCK@0.05 uses a ~96 px tolerance (0.05 × 1920). Expect MediaPipe
-to do poorly — low recall and/or large mean_error — because it was trained on land
-humans and much of a swimmer is submerged under splash. That poor number is the point:
-it is the floor the swim-specific model has to clear.
+```bash
+python3 scripts/measure_pose_baseline.py \
+  --sequence-dir baseline_data/breast_side_above \
+  --fps 60
+```
+
+**Current recorded baseline:**
+
+| date | backend | frames | matched keypoints | mean error | median error | PCK@0.05 | recall |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-06-21 | mediapipe | 301 | 1026 | 0.5081 | 0.4076 | 0.0000 | 0.2272 |
+
+The report also contains mean error, median error, PCK@0.05, and recall for each
+mapped joint.
+
+### Compare two backends
+
+```bash
+python3 scripts/measure_pose_baseline.py \
+  --sequence-dir baseline_data/breast_side_above \
+  --fps 60 \
+  --compare mediapipe,onnx
+```
+
+Comparison output records both backends, backend-B-minus-backend-A deltas for
+mean error, PCK@0.05, and recall, and labels each change as improved, worsened,
+or unchanged. `POSE_BACKEND` still defaults to MediaPipe. ONNX comparison requires
+a readable `POSE_ONNX_PATH`; otherwise the command exits with a clear message
+before inference starts.
+
+### Metric definitions
+
+- **Mean error:** mean Euclidean landmark error in normalised image-coordinate
+  units across matched keypoints. Lower is better.
+- **Median error:** median of the same matched-keypoint errors. Lower is better.
+- **PCK@0.05:** fraction of matched keypoints no more than 0.05 normalised units
+  from their labelled point. Higher is better.
+- **Recall:** matched predicted keypoints divided by all mapped visible
+  ground-truth keypoints. Missing frames and joints reduce recall.
+- **Per-joint metrics:** the same values grouped by mapped landmark so weak body
+  regions are visible instead of being hidden inside one aggregate.
+
+**Read it honestly.** This one synthetic, monocular sequence does not establish
+real-world pose quality or coaching usefulness. Its low recall and large error
+make it a useful floor for later swim-specific backends, while consented real
+clips and coach review remain necessary.
 
 **Caveats / confidence.**
 
@@ -51,8 +94,8 @@ it is the floor the swim-specific model has to clear.
   label sequences, then visually verified. The visible upper body aligns tightly;
   submerged torso/legs are geometrically correct but hard to verify against the
   refracted image, so treat the ground truth as ~tens-of-px accurate, not perfect.
-- Synthetic, monocular, one view, one stroke. This is a technical floor, NOT coaching
-  accuracy. Real coach-labelled clips (see below) are still required.
+- Synthetic, monocular, one view, one stroke. This is a technical floor, not a
+  coaching claim. Real coach-labelled clips (see below) are still required.
 - To add sequences (the Aerial view, other strokes), repeat with the matching video +
   `COCO/2D_cam.txt` and `--flip-y`.
 

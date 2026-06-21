@@ -103,30 +103,68 @@ def keypoint_errors(pred: List[Dict[str, Any]],
     frame_idx and landmark name. Also reports PCK@0.05 (fraction of keypoints
     within 0.05 of truth). Lower error / higher PCK = better.
     """
-    truth_by_frame = {t["frame_idx"]: t.get("landmarks", {}) for t in truth}
+    pred_by_frame = {p["frame_idx"]: p.get("landmarks", {}) for p in pred}
     dists: List[float] = []
     matched = 0
     total_truth = 0
-    for p in pred:
-        gt = truth_by_frame.get(p["frame_idx"])
-        if not gt:
-            continue
-        pl = p.get("landmarks", {})
+    joint_distances: Dict[str, List[float]] = {}
+    joint_totals: Dict[str, int] = {}
+    joint_matched: Dict[str, int] = {}
+    for truth_frame in truth:
+        gt = truth_frame.get("landmarks", {})
+        pl = pred_by_frame.get(truth_frame["frame_idx"], {})
         for name, tpt in gt.items():
             total_truth += 1
+            joint_totals[name] = joint_totals.get(name, 0) + 1
             pp = pl.get(name)
             if not pp:
                 continue
+            try:
+                coordinates = tuple(float(value) for value in (
+                    pp.get("x"), pp.get("y"), tpt.get("x"), tpt.get("y")
+                ))
+            except (TypeError, ValueError):
+                continue
+            if not all(np.isfinite(value) for value in coordinates):
+                continue
+            pred_x, pred_y, truth_x, truth_y = coordinates
             matched += 1
-            dists.append(float(np.hypot(pp["x"] - tpt["x"], pp["y"] - tpt["y"])))
-    if not dists:
-        return {"matched_keypoints": 0, "mean_error": None, "pck_0.05": None,
-                "recall": 0.0}
-    d = np.asarray(dists)
+            joint_matched[name] = joint_matched.get(name, 0) + 1
+            distance = float(np.hypot(pred_x - truth_x, pred_y - truth_y))
+            dists.append(distance)
+            joint_distances.setdefault(name, []).append(distance)
+
+    def aggregate(distances: Sequence[float], matched_count: int,
+                  truth_count: int) -> Dict[str, Any]:
+        if not distances:
+            return {
+                "matched_keypoints": matched_count,
+                "truth_keypoints": truth_count,
+                "mean_error": None,
+                "median_error": None,
+                "pck_0.05": None,
+                "recall": 0.0,
+            }
+        values = np.asarray(distances, dtype=float)
+        return {
+            "matched_keypoints": matched_count,
+            "truth_keypoints": truth_count,
+            "mean_error": round(float(values.mean()), 4),
+            "median_error": round(float(np.median(values)), 4),
+            "pck_0.05": round(float(np.mean(values <= 0.05)), 4),
+            "recall": round(matched_count / truth_count, 4) if truth_count else 0.0,
+        }
+
+    overall = aggregate(dists, matched, total_truth)
+    per_joint = {
+        name: aggregate(
+            joint_distances.get(name, []),
+            joint_matched.get(name, 0),
+            joint_totals[name],
+        )
+        for name in sorted(joint_totals)
+    }
     return {
-        "matched_keypoints": matched,
-        "mean_error": round(float(d.mean()), 4),
-        "median_error": round(float(np.median(d)), 4),
-        "pck_0.05": round(float(np.mean(d <= 0.05)), 4),
-        "recall": round(matched / total_truth, 4) if total_truth else 0.0,
+        **overall,
+        "per_joint": per_joint,
     }
