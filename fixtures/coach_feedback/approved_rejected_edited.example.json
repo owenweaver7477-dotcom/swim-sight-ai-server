@@ -1,0 +1,81 @@
+{
+  "video_upload_id": "synthetic-video-id",
+  "review_id": "synthetic-review-id",
+  "stroke_type": "breaststroke",
+  "camera_angle": "Side",
+  "worker_version": "pose-mvp-0.5",
+  "ai_findings": [
+    {
+      "finding_id": "body_line_001",
+      "title": "Body Line Needs Coach Review",
+      "fault_tag": "body_line",
+      "severity": "moderate",
+      "evidence_frames": [12, 18, 24],
+      "phase": "extension",
+      "confidence": 0.68
+    },
+    {
+      "finding_id": "head_lift_002",
+      "title": "Head Position Needs Coach Review",
+      "fault_tag": "head_lift",
+      "severity": "high",
+      "evidence_frames": [32, 36, 40],
+      "phase": "breath",
+      "confidence": 0.91
+    },
+    {
+      "finding_id": "kick_width_003",
+      "title": "Kick Width Needs Coach Review",
+      "fault_tag": "kick_width",
+      "severity": "moderate",
+      "evidence_frames": [54, 58, 62],
+      "phase": "kick",
+      "confidence": 0.74
+    },
+    {
+      "finding_id": "timing_004",
+      "title": "Timing Evidence Needs Coach Review",
+      "fault_tag": "stroke_timing",
+      "severity": "moderate",
+      "evidence_frames": [70, 76],
+      "phase": null,
+      "confidence": 0.84
+    },
+    {
+      "finding_id": "line_reset_005",
+      "title": "Line Reset Needs More Context",
+      "fault_tag": "line_reset",
+      "severity": "minor",
+      "evidence_frames": [88],
+      "phase": "extension",
+      "confidence": 0.5
+    }
+  ],
+  "coach_decisions": [
+    {
+      "finding_id": "body_line_001",
+      "decision": "approved",
+      "coach_severity": "moderate",
+      "coach_note": "This note is deliberately excluded unless marked safe."
+    },
+    {
+      "finding_id": "head_lift_002",
+      "decision": "rejected",
+      "coach_severity": "high"
+    },
+    {
+      "finding_id": "kick_width_003",
+      "decision": "approved",
+      "coach_severity": "minor",
+      "corrected_cue": "Keep the recovery narrow before turning the feet."
+    },
+    {
+      "finding_id": "timing_004",
+      "decision": "unsafe_to_use"
+    },
+    {
+      "finding_id": "line_reset_005",
+      "decision": "needs_more_context"
+    }
+  ]
+}

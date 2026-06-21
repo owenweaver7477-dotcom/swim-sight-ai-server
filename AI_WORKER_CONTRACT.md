@@ -20,6 +20,10 @@ The worker does not own:
 
 The Vercel app and Supabase database remain the source of truth.
 
+Coach feedback ingestion is not a production worker route. Phase 5 provides a
+local privacy-safe JSONL evaluation contract only; no automatic model training
+or production update occurs.
+
 ## Current Routes
 
 ### `GET /`
@@ -246,6 +250,23 @@ The worker retains all 33 MediaPipe Pose landmarks internally, including face,
 hand, heel, and foot-index points when visible. The stable `keypoint_count`
 quality gate still counts only the original 15 core body landmarks, so richer
 landmark availability cannot make weak pose evidence pass the gate by itself.
+
+## Local Coach Feedback Contract
+
+`coach_feedback_v1` records capture coach decisions on AI-assisted draft
+findings for offline evaluation. Supported decisions are `approved`, `rejected`,
+`edited`, `needs_more_context`, and `unsafe_to_use`.
+
+Sanitised records may include stroke, camera angle, worker version, finding
+title/type, AI and coach severity, phase, confidence, evidence-frame count,
+decision type, and explicitly safe corrected wording. They must not include
+video URLs, signed URLs, raw landmarks, full frames, private paths, swimmer or
+guardian identity, height/mass, or source video/review identifiers.
+
+The local writer stores one privacy-validated record per JSONL line under the
+Git-ignored `coach_feedback_exports/` directory. There is no `/coach-feedback`
+endpoint in Phase 5 because Render-local files are not durable production
+storage. Coach feedback does not automatically train or change the worker.
 
 ## `estimated_drag` (internal pilot prototype — disabled by default)
 

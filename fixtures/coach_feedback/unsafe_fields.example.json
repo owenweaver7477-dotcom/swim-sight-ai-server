@@ -1,0 +1,30 @@
+{
+  "video_upload_id": "synthetic-redacted-id",
+  "review_id": "synthetic-redacted-review",
+  "stroke_type": "freestyle",
+  "camera_angle": "Side",
+  "worker_version": "pose-mvp-0.5",
+  "signed_video_url": "REDACTED_UNSAFE_FIELD",
+  "raw_landmarks": "REDACTED_UNSAFE_FIELD",
+  "height_cm": null,
+  "mass_kg": null,
+  "swimmer_name": "REDACTED_UNSAFE_FIELD",
+  "ai_findings": [
+    {
+      "finding_id": "catch_001",
+      "title": "Catch Setup Needs Coach Review",
+      "fault_tag": "catch_setup",
+      "severity": "moderate",
+      "evidence_frames": [8, 12, 16],
+      "phase": "entry_catch",
+      "confidence": 0.7,
+      "landmarks": "REDACTED_UNSAFE_FIELD"
+    }
+  ],
+  "coach_decisions": [
+    {
+      "finding_id": "catch_001",
+      "decision": "approved"
+    }
+  ]
+}

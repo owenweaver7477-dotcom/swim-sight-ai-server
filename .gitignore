@@ -16,3 +16,4 @@ export/
 *.onnx
 *.pth
 baseline_data/
+coach_feedback_exports/
