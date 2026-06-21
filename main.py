@@ -701,6 +701,7 @@ async def run_analysis_pipeline(
                         height_cm=request.swimmer_height_cm,
                         mass_kg=request.swimmer_mass_kg,
                         stroke=request.stroke_type or "Freestyle",
+                        calibration_config=request.calibration_config,
                     )
                     if estimated_drag:
                         analysis_payload["estimated_drag"] = estimated_drag

@@ -27,6 +27,9 @@ class VideoProcessingRequest(BaseModel):
     # pose tracking and estimate drag/force. Never echoed in the callback.
     swimmer_height_cm: Optional[float] = None
     swimmer_mass_kg: Optional[float] = None
+    # Optional internal known-distance calibration. Raw image points are used
+    # for scale calculation only and are never echoed in the callback.
+    calibration_config: Optional[Dict[str, Any]] = None
 
 
 class HealthResponse(BaseModel):

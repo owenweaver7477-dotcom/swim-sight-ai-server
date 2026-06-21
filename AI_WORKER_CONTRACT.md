@@ -67,6 +67,7 @@ Recommended request fields:
 - `downscale_frames`
 - `swimmer_height_cm` (optional; server-side only, drives drag estimate)
 - `swimmer_mass_kg` (optional; server-side only, drives drag estimate)
+- `calibration_config` (optional; internal known-distance scale input)
 
 Accepted response:
 
@@ -269,6 +270,18 @@ Always present when the block is included:
 - `summary.mean_drag_force_n`, `summary.peak_drag_force_n`
 - `summary.mean_drag_to_weight_ratio`
 - per-frame `series.drag_force_n`, `series.drag_to_weight_ratio`
+
+When a valid `calibration_config` is explicitly supplied, image displacement
+uses the resulting known-distance scale and the block is labelled `calibrated
+from marked image distance; drag remains estimated -- not measured`. A safe
+`calibration` summary may include status, coordinate space, known distance, and
+derived scale. Raw image points are never echoed. Invalid calibration input
+falls back to the existing monocular estimate and may include a safe internal
+reason. No calibration fields are added when no calibration is supplied.
+
+Known-distance calibration improves scale only. It does not correct water
+refraction, camera angle/perspective, lens distortion, occlusion, or pose error,
+and does not make the drag prototype a validated hydrodynamics measurement.
 
 Included only when `confidence_low` is `false`:
 

@@ -44,8 +44,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 try:  # works when imported as part of the app package (main.py)
+    from app.calibration import calculate_known_distance_calibration, safe_calibration_summary
     from app.anthropometric_drag import Swimmer, AnthropometricDragModel, POSE_PRESETS
 except ImportError:  # works when run directly from inside app/
+    from calibration import calculate_known_distance_calibration, safe_calibration_summary
     from anthropometric_drag import Swimmer, AnthropometricDragModel, POSE_PRESETS
 
 logger = logging.getLogger(__name__)
@@ -213,6 +215,7 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
                  stroke: str = "freestyle",
                  lane_axis: str = "x",
                  scale_m_per_unit_override: Optional[float] = None,
+                 calibration_config: Optional[Dict[str, Any]] = None,
                  min_visibility: float = 0.0,
                  smooth_seconds_accel: float = 0.8) -> Optional[Dict[str, Any]]:
     """
@@ -237,13 +240,26 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
     pose_key = _pose_key(stroke)
     model = AnthropometricDragModel(swimmer, pose=pose_key)
 
+    calibration_result = (
+        calculate_known_distance_calibration(calibration_config)
+        if calibration_config is not None
+        else None
+    )
+
     # Step 6: scale -- a calibration override (e.g. from a known pool marking)
-    # if supplied, else the robust monocular estimate.
+    # remains backwards-compatible. The structured known-distance calibration
+    # is preferred when no legacy numeric override is supplied. Invalid input
+    # falls back to the current robust monocular estimate.
     if scale_m_per_unit_override and scale_m_per_unit_override > 0:
         s = float(scale_m_per_unit_override)
         scale = {"scale_m_per_unit": s, "body_length_units": None,
                  "extended_frame": None, "scale_frames": 0}
         scale_basis = "calibrated"
+    elif calibration_result and calibration_result.get("calibration_status") == "calibrated":
+        s = float(calibration_result["metres_per_normalised_unit"])
+        scale = {"scale_m_per_unit": s, "body_length_units": None,
+                 "extended_frame": None, "scale_frames": 0}
+        scale_basis = "known-distance"
     else:
         scale = estimate_scale(pose_results, swimmer.height_m, min_visibility)
         if scale is None:
@@ -311,9 +327,13 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
     velocity_drop_ratio = (v_min / v_max) if v_max > 0 else 0.0
 
     # Step 9: drag + drag-to-weight always; net/propulsive only when confident.
+    basis = f"estimated ({scale_basis} scale from MediaPipe pose) -- not measured"
+    if scale_basis == "known-distance":
+        basis = "calibrated from marked image distance; drag remains estimated -- not measured"
+
     payload: Dict[str, Any] = {
         "label": "estimated_drag",
-        "basis": f"estimated ({scale_basis} scale from MediaPipe pose) -- not measured",
+        "basis": basis,
         "pose_source": "mediapipe_pose",
         "stroke": pose_key,
         "confidence_low": bool(confidence_low),
@@ -336,6 +356,14 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
             "drag_to_weight_ratio": [round(float(x), 4) for x in dwr],
         },
     }
+    if calibration_result is not None:
+        payload["metric_basis"] = (
+            "calibrated"
+            if calibration_result.get("calibration_status") == "calibrated"
+            and scale_basis == "known-distance"
+            else "estimated"
+        )
+        payload["calibration"] = safe_calibration_summary(calibration_result)
     if not confidence_low:
         payload["summary"]["mean_propulsive_force_n"] = round(float(np.mean(prop)), 2)
         payload["summary"]["peak_propulsive_force_n"] = round(float(np.max(prop)), 2)
