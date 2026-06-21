@@ -14,3 +14,4 @@ work_dirs/
 export/
 *.onnx
 *.pth
+baseline_data/
