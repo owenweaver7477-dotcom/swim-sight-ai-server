@@ -109,7 +109,7 @@ def validate_backend_configuration(backend: str) -> None:
         if not model_path:
             raise ValueError(
                 "The ONNX comparison backend is unavailable: set POSE_ONNX_PATH "
-                "to a readable exported model before using --compare mediapipe,onnx."
+                "to a readable exported model before evaluating the ONNX backend."
             )
         if not Path(model_path).expanduser().is_file():
             raise ValueError(

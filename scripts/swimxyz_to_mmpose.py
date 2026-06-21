@@ -24,6 +24,11 @@ sys.path.insert(0, str(ROOT))
 
 from app.swimxyz_adapter import COCO17_TO_WORKER  # noqa: E402
 from scripts.measure_pose_baseline import IMAGE_SUFFIXES, load_array  # noqa: E402
+from scripts.swimxyz_labels_to_npy import (  # noqa: E402
+    COCO17_FROM_OPENPOSE,
+    OPENPOSE_BODY25,
+    OPENPOSE_COCO18,
+)
 
 COCO17_NAMES = (
     "nose", "left_eye", "right_eye", "left_ear", "right_ear",
@@ -36,6 +41,7 @@ COCO_SKELETON = (
     (7, 13), (6, 7), (6, 8), (7, 9), (8, 10), (9, 11),
     (2, 3), (1, 2), (1, 3), (2, 4), (3, 5), (4, 6), (5, 7),
 )
+SUPPORTED_LAYOUTS = ("coco17", "openpose_coco18", "openpose_body25")
 
 
 def parse_joint_order(raw: str) -> Tuple[str, ...]:
@@ -49,18 +55,73 @@ def parse_joint_order(raw: str) -> Tuple[str, ...]:
 
 
 def reorder_to_coco17(joints: np.ndarray, source_order: Sequence[str]) -> np.ndarray:
-    if joints.ndim != 3 or joints.shape[1] < 17 or joints.shape[2] < 2:
-        raise ValueError("joints must have shape (frames, >=17, >=2)")
+    if joints.ndim != 3 or joints.shape[2] < 2:
+        raise ValueError("joints must have shape (frames, joints, >=2)")
+    if joints.shape[1] != len(source_order):
+        raise ValueError(
+            f"joint array contains {joints.shape[1]} joints but the declared order contains "
+            f"{len(source_order)} names"
+        )
     indices = [source_order.index(name) for name in COCO17_NAMES]
     return np.asarray(joints[:, indices, :2], dtype=float)
 
 
 def reorder_visibility_to_coco17(visibility: np.ndarray,
                                  source_order: Sequence[str]) -> np.ndarray:
-    if visibility.ndim != 2 or visibility.shape[1] < 17:
-        raise ValueError("visibility must have shape (frames, >=17)")
+    if visibility.ndim != 2 or visibility.shape[1] != len(source_order):
+        raise ValueError(
+            f"visibility must have shape (frames, {len(source_order)}) for the declared layout"
+        )
     indices = [source_order.index(name) for name in COCO17_NAMES]
     return np.asarray(visibility[:, indices], dtype=float)
+
+
+def _openpose_indices(layout: str) -> Tuple[int, ...]:
+    if layout == "openpose_coco18":
+        mapping = OPENPOSE_COCO18
+    elif layout == "openpose_body25":
+        mapping = OPENPOSE_BODY25
+    else:
+        raise ValueError(
+            f"Unsupported joint layout {layout!r}; expected one of {', '.join(SUPPORTED_LAYOUTS)}."
+        )
+    return tuple(mapping[name] for name in COCO17_FROM_OPENPOSE)
+
+
+def convert_joint_layout(joints: np.ndarray, layout: str,
+                         source_order: Sequence[str] = COCO17_NAMES) -> np.ndarray:
+    array = np.asarray(joints)
+    if layout == "coco17":
+        return reorder_to_coco17(array, source_order)
+    indices = _openpose_indices(layout)
+    expected = 18 if layout == "openpose_coco18" else 25
+    if array.ndim != 3 or array.shape[1] != expected or array.shape[2] < 2:
+        raise ValueError(
+            f"{layout} joints must have shape (frames, {expected}, >=2); got {array.shape}."
+        )
+    return np.asarray(array[:, indices, :2], dtype=float)
+
+
+def convert_visibility_layout(visibility: np.ndarray, layout: str,
+                              source_order: Sequence[str] = COCO17_NAMES) -> np.ndarray:
+    array = np.asarray(visibility)
+    if layout == "coco17":
+        return reorder_visibility_to_coco17(array, source_order)
+    indices = _openpose_indices(layout)
+    expected = 18 if layout == "openpose_coco18" else 25
+    if array.ndim != 2 or array.shape[1] != expected:
+        raise ValueError(
+            f"{layout} visibility must have shape (frames, {expected}); got {array.shape}."
+        )
+    return np.asarray(array[:, indices], dtype=float)
+
+
+def flip_unity_y_to_image(joints: np.ndarray, image_height: int) -> np.ndarray:
+    if image_height <= 0:
+        raise ValueError("image height must be positive before applying --flip-y")
+    flipped = np.asarray(joints, dtype=float).copy()
+    flipped[:, :, 1] = float(image_height) - flipped[:, :, 1]
+    return flipped
 
 
 def _bbox_from_keypoints(points: np.ndarray, visible: np.ndarray,
@@ -83,7 +144,12 @@ def _bbox_from_keypoints(points: np.ndarray, visible: np.ndarray,
 
 def build_coco_document(joints: np.ndarray, image_names: Sequence[str],
                         width: int, height: int,
-                        visibility: Optional[np.ndarray] = None) -> Dict:
+                        visibility: Optional[np.ndarray] = None,
+                        coordinate_convention: str = "image-space top-left origin, y-down") -> Dict:
+    if joints.ndim != 3 or joints.shape[1] != 17 or joints.shape[2] < 2:
+        raise ValueError("training joints must have shape (frames, 17, >=2) in COCO-17 order")
+    if width <= 0 or height <= 0:
+        raise ValueError("image width and height must be positive")
     if len(image_names) != joints.shape[0]:
         raise ValueError("image count must match the number of joint frames")
     if visibility is not None and visibility.shape[:2] != joints.shape[:2]:
@@ -127,6 +193,7 @@ def build_coco_document(joints: np.ndarray, image_names: Sequence[str],
             "description": "SwimXYZ conversion for Swim Sight pose training",
             "license": "CC-BY-4.0",
             "citation": "Fiche et al., SwimXYZ, ACM MIG 2023",
+            "coordinate_convention": coordinate_convention,
         },
         "images": images,
         "annotations": annotations,
@@ -147,9 +214,16 @@ def validate_coco_document(document: Dict) -> None:
         raise ValueError("COCO image and annotation counts differ")
     if not document["categories"] or len(document["categories"][0].get("keypoints", [])) != 17:
         raise ValueError("COCO category must define 17 keypoints")
+    if tuple(document["categories"][0]["keypoints"]) != COCO17_NAMES:
+        raise ValueError("COCO category keypoints are not in the required COCO-17 order")
+    image_ids = [image.get("id") for image in document["images"]]
+    if len(set(image_ids)) != len(image_ids):
+        raise ValueError("COCO image IDs must be unique")
     for annotation in document["annotations"]:
         if len(annotation.get("keypoints", [])) != 51:
             raise ValueError("Every annotation must contain 17x3 keypoint values")
+        if annotation.get("image_id") not in image_ids:
+            raise ValueError("COCO annotation references an unknown image")
 
 
 def split_indices(count: int, val_ratio: float, seed: int) -> Tuple[List[int], List[int]]:
@@ -190,6 +264,9 @@ def run_self_test() -> int:
     train_indices, val_indices = split_indices(4, 0.25, 7)
     validate_coco_document(subset_document(document, train_indices))
     validate_coco_document(subset_document(document, val_indices))
+    openpose = np.zeros((2, 18, 2), dtype=float)
+    converted = convert_joint_layout(openpose, "openpose_coco18")
+    assert converted.shape == (2, 17, 2)
     with tempfile.TemporaryDirectory() as temp_dir:
         target = Path(temp_dir) / "self_test.json"
         target.write_text(json.dumps(document))
@@ -220,11 +297,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--images-dir", help="Matching image frames")
     parser.add_argument("--output-dir", default="data/swimxyz/annotations")
     parser.add_argument("--stroke", default="freestyle")
+    parser.add_argument("--joint-layout", choices=SUPPORTED_LAYOUTS, default="coco17",
+                        help="Input array layout before conversion to COCO-17")
     parser.add_argument("--joint-order", default=",".join(COCO17_NAMES))
     parser.add_argument("--image-width", type=int, default=None)
     parser.add_argument("--image-height", type=int, default=None)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--flip-y", action="store_true",
+        help=("Convert raw SwimXYZ Unity y-up coordinates to image y-down. "
+              "Required for raw labels; do not use for an already prepared/flipped array."),
+    )
     return parser
 
 
@@ -243,11 +327,16 @@ def main(argv=None) -> int:
         return 2
 
     try:
+        if (args.image_width is None) != (args.image_height is None):
+            raise ValueError("Provide both --image-width and --image-height, or neither.")
         source_order = parse_joint_order(args.joint_order)
-        joints = reorder_to_coco17(load_array(joints_path, args.joints_key), source_order)
+        joints = convert_joint_layout(
+            load_array(joints_path, args.joints_key), args.joint_layout, source_order
+        )
         visibility = (
-            reorder_visibility_to_coco17(
+            convert_visibility_layout(
                 load_array(Path(args.visibility).expanduser(), args.visibility_key),
+                args.joint_layout,
                 source_order,
             )
             if args.visibility else None
@@ -265,7 +354,17 @@ def main(argv=None) -> int:
             if args.image_width and args.image_height
             else _infer_image_size(images[0])
         )
-        document = build_coco_document(joints, [path.name for path in images], width, height, visibility)
+        if args.flip_y:
+            joints = flip_unity_y_to_image(joints, height)
+        convention = (
+            "converted from Unity bottom-left origin/y-up to image top-left origin/y-down"
+            if args.flip_y else
+            "input used unchanged; expected image-space top-left origin/y-down"
+        )
+        document = build_coco_document(
+            joints, [path.name for path in images], width, height, visibility,
+            coordinate_convention=convention,
+        )
         validate_coco_document(document)
         train_indices, val_indices = split_indices(len(images), args.val_ratio, args.seed)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
@@ -280,6 +379,8 @@ def main(argv=None) -> int:
     val_path.write_text(json.dumps(subset_document(document, val_indices), indent=2))
     print(f"Wrote {len(train_indices)} training frames to {train_path}")
     print(f"Wrote {len(val_indices)} validation frames to {val_path}")
+    if not args.flip_y:
+        print("Y coordinates were used unchanged. Raw SwimXYZ Unity labels require --flip-y.")
     return 0
 
 

@@ -9,6 +9,7 @@ samples/videos/*
 samples/labels.local.json
 baseline_reports/*
 !baseline_reports/.gitkeep
+backend_eval_reports/
 data/swimxyz/
 work_dirs/
 export/

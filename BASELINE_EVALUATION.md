@@ -93,11 +93,48 @@ clips and coach review remain necessary.
 - The sequence was auto-identified by matching the swimmer's motion against all 576
   label sequences, then visually verified. The visible upper body aligns tightly;
   submerged torso/legs are geometrically correct but hard to verify against the
-  refracted image, so treat the ground truth as ~tens-of-px accurate, not perfect.
+  refracted image, so treat the ground truth as approximate with tens-of-pixel uncertainty.
 - Synthetic, monocular, one view, one stroke. This is a technical floor, not a
   coaching claim. Real coach-labelled clips (see below) are still required.
 - To add sequences (the Aerial view, other strokes), repeat with the matching video +
   `COCO/2D_cam.txt` and `--flip-y`.
+
+## Roadmap Phase 2 — Evaluate a candidate backend
+
+The Phase 1 MediaPipe baseline to beat on the prepared sequence is:
+
+- mean error: `0.5081`
+- median error: `0.4076`
+- PCK@0.05: `0.0000`
+- recall: `0.2272`
+
+After exporting a candidate ONNX model, run both backends against exactly the
+same labels and frames:
+
+```bash
+POSE_ONNX_PATH=/path/to/rtmpose-m-swimxyz.onnx \
+python3 scripts/eval_backends_against_truth.py \
+  --sequence-dir baseline_data/breast_side_above \
+  --fps 60 \
+  --baseline mediapipe \
+  --candidate onnx \
+  --overlay-frames 5
+```
+
+The evaluator writes JSON and Markdown reports to `backend_eval_reports/` and
+overlay images to `backend_eval_reports/overlays/`. Reports contain overall and
+per-joint candidate-minus-baseline deltas:
+
+- negative mean/median error delta: improved;
+- positive PCK@0.05 or recall delta: improved;
+- the opposite sign: worsened; and
+- a zero delta at report precision: unchanged.
+
+Do not trust a numeric improvement until the overlays confirm that frame
+indices, coordinate direction, image scaling, and landmark names align. A model
+can produce attractive numbers for the wrong mapping. This remains internal
+evaluation, not a public product claim, and coach approval remains required for
+product findings. `POSE_BACKEND` remains MediaPipe by default.
 
 ## What This Measures
 
@@ -297,6 +334,7 @@ Real videos and generated baseline reports are ignored by git:
 
 - `samples/videos/*`
 - `baseline_reports/*`
+- `backend_eval_reports/*`
 
 Only `.gitkeep` files are committed.
 

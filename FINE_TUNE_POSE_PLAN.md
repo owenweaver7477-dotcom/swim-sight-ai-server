@@ -1,12 +1,14 @@
 # Fine-tune a swim-specific pose model (ViTPose / RTMPose on SwimXYZ)
 
-**Goal:** replace generic MediaPipe BlazePose with a pose model trained on actual
-swimming, behind a `POSE_BACKEND` flag, so the swap is reversible and measured.
+**Goal:** evaluate a swimming-specific pose model against the current MediaPipe
+baseline, behind a `POSE_BACKEND` flag, so any later swap is reversible and
+supported by internal evidence.
 
 **Why this is the real upgrade:** MediaPipe is trained on land humans and
 struggles with the aquatic environment. SwimXYZ exists precisely to fix the
-"no labelled swim data" gap, and its authors already showed a finetuned ViTPose
-working on swimming. You are walking a proven path, not inventing one.
+"no labelled swim data" gap, and its authors reported a fine-tuned ViTPose on
+their synthetic swimming dataset. The candidate still needs independent overlay
+inspection and representative evaluation before production use.
 
 **Licensing (hand these names to your lawyer):**
 - ViTPose, MMPose, MMDeploy, ONNX Runtime, MediaPipe -> **Apache-2.0** (commercial OK).
@@ -39,12 +41,15 @@ You cannot claim an upgrade without a number to beat. The adapter makes this eas
    print(keypoint_errors(pred, truth))   # mean_error, PCK@0.05, recall
    ```
 
-That `mean_error` / `pck_0.05` / `recall` on swim footage is your honest baseline.
+That `mean_error` / `pck_0.05` / `recall` on labelled evaluation footage is the baseline.
 Record it (this is what `BASELINE_EVALUATION.md` wants).
+
+Current prepared side-above breaststroke baseline (301 frames): mean error
+`0.5081`, median error `0.4076`, PCK@0.05 `0.0000`, recall `0.2272`.
 
 ## Phase 1 - Pick the model
 
-| Model | Accuracy | CPU speed | Fit |
+| Model | Expected evaluation quality | CPU speed | Fit |
 | --- | --- | --- | --- |
 | **RTMPose-m** | high | **fast** | best for a CPU Render box; recommended first |
 | **ViTPose-base** | higher | slower | if you can run a small GPU instance |
@@ -98,7 +103,8 @@ python3 scripts/swimxyz_to_mmpose.py \
   --joints /data/swimxyz/freestyle/joints.npy \
   --images-dir /data/swimxyz/freestyle/images \
   --output-dir /data/swimxyz/annotations \
-  --stroke freestyle
+  --stroke freestyle \
+  --joint-layout coco17
 
 cd /workspace/mmpose
 SWIMXYZ_DATA_ROOT=/data/swimxyz/ \
@@ -107,6 +113,11 @@ python tools/train.py \
   /workspace/swim-sight-ai-server/configs/rtmpose-m_swimxyz.py \
   --work-dir /workspace/work_dirs/rtmpose-m_swimxyz-freestyle
 ```
+
+If the input array still uses raw SwimXYZ Unity screen coordinates (bottom-left
+origin, y-up), add `--flip-y`. Do not add it when the array has already been
+converted to image-space y-down. OpenPose COCO-18 and BODY-25 arrays can be
+declared with `--joint-layout openpose_coco18` or `openpose_body25`.
 
 Do not run training until the SwimXYZ files have been obtained under their
 CC-BY-4.0 terms and the attribution below is retained.
@@ -117,6 +128,8 @@ CC-BY-4.0 terms and the attribution below is retained.
 - Cross-check with YOUR metric: run the finetuned model on the held-out clips,
   `keypoint_errors(pred, truth)` against ground truth, and confirm `mean_error`
   drops and `pck_0.05` / `recall` rise vs the Phase 0 baseline.
+- Inspect ground-truth/prediction overlays. Numeric improvement is not trusted
+  if the visual mapping, Y axis, frame alignment, or joint names are wrong.
 
 ## Phase 6 - Export to ONNX
 
@@ -134,6 +147,27 @@ python tools/deploy.py \
 
 Quantise to int8 for CPU if latency is tight. Keep the `.onnx` out of git (large);
 store it on S3/Render disk and load at startup.
+
+### Roadmap Phase 2 comparison gate
+
+Once an exported model exists locally, compare it against MediaPipe on the same
+prepared sequence:
+
+```bash
+POSE_ONNX_PATH=/models/rtmpose-m-swimxyz.onnx \
+python3 scripts/eval_backends_against_truth.py \
+  --sequence-dir baseline_data/breast_side_above \
+  --fps 60 \
+  --baseline mediapipe \
+  --candidate onnx \
+  --overlay-frames 5
+```
+
+The tool writes ignored JSON/Markdown reports and GT/prediction overlays under
+`backend_eval_reports/`. Negative mean/median error deltas and positive
+PCK/recall deltas indicate improvement. Overlay inspection is mandatory before
+trusting those numbers. This is internal evaluation, not a public product claim;
+coach approval remains required for findings.
 
 ## Phase 7 - Integrate behind POSE_BACKEND (default OFF)
 
