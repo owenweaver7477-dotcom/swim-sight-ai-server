@@ -4,6 +4,58 @@ Phase 15C adds script-based contract tests and a local baseline harness for the 
 
 This is not a model upgrade. It protects the current worker contract before future RTMPose, CLAHE, Kalman smoothing, ONNX, or other AI upgrades.
 
+## Pose Accuracy Baseline — MediaPipe vs SwimXYZ ground truth (Roadmap Phase 1)
+
+This is the honest accuracy number the roadmap calls for: how well the CURRENT pose
+backend (MediaPipe, `POSE_BACKEND` unset) locates joints on real swimming frames,
+scored against SwimXYZ synthetic ground truth. Every later pose upgrade (RTMPose /
+ViTPose ONNX) must beat it.
+
+**Prepared sequence** (Breaststroke, side-above-water view):
+`Side_above_water/Swimmer_Skin_0,25_Muscle_2/Water_Quantity_0,25_Height_0,6/Lighting_rotx_140_roty_280/Speed_3/position_1,75`
+
+- 301 frames @ 1920×1080, 60 fps (from `Side_above.webm`).
+- Ground truth: `baseline_data/breast_side_above/seq_joints.npy` — `(302, 17, 2)` COCO-17, **image-space pixels**.
+- Frames: `baseline_data/breast_side_above/frames/` (git-ignored).
+
+**Critical convention finding.** SwimXYZ 2D labels are in **Unity screen space (origin
+bottom-left, y-UP)**. They must be flipped to image space (`image_y = 1080 − y`) or the
+ground truth is upside-down and the score is meaningless. This is now built into
+`scripts/swimxyz_labels_to_npy.py --flip-y --image-height 1080`, and the prepared
+`.npy` already has the flip applied — verified by overlaying the skeleton on the real
+frames (head/shoulders track the swimmer across the whole pass).
+
+**Run it** (needs the worker venv with `mediapipe` + `opencv`):
+
+```bash
+python3 scripts/measure_pose_baseline.py \
+  --joints baseline_data/breast_side_above/seq_joints.npy \
+  --frames-dir baseline_data/breast_side_above/frames \
+  --fps 60
+```
+
+Paste the printed JSON into this table:
+
+| date | backend | frames | mean_error (px) | PCK@0.05 | recall |
+| --- | --- | --- | --- | --- | --- |
+| _run it_ | mediapipe | 301 | _?_ | _?_ | _?_ |
+
+**Read it honestly.** PCK@0.05 uses a ~96 px tolerance (0.05 × 1920). Expect MediaPipe
+to do poorly — low recall and/or large mean_error — because it was trained on land
+humans and much of a swimmer is submerged under splash. That poor number is the point:
+it is the floor the swim-specific model has to clear.
+
+**Caveats / confidence.**
+
+- The sequence was auto-identified by matching the swimmer's motion against all 576
+  label sequences, then visually verified. The visible upper body aligns tightly;
+  submerged torso/legs are geometrically correct but hard to verify against the
+  refracted image, so treat the ground truth as ~tens-of-px accurate, not perfect.
+- Synthetic, monocular, one view, one stroke. This is a technical floor, NOT coaching
+  accuracy. Real coach-labelled clips (see below) are still required.
+- To add sequences (the Aerial view, other strokes), repeat with the matching video +
+  `COCO/2D_cam.txt` and `--flip-y`.
+
 ## What This Measures
 
 Use the baseline harness to record:
@@ -239,3 +291,20 @@ Quantitative accuracy cannot be claimed until Owen provides labelled test clips 
 - acceptable/manual-review judgement
 
 Until then, this harness measures contract safety and baseline technical behaviour, not coaching accuracy.
+
+## Real SwimXYZ baseline — Side-above breaststroke
+
+Date: 2026-06-21  
+Backend: MediaPipe  
+Clip: `baseline_data/breast_side_above`  
+Frames compared: 301  
+Matched keypoints: 1026  
+
+| Metric | Result |
+|---|---:|
+| Mean error | 0.5081 |
+| Median error | 0.4076 |
+| PCK@0.05 | 0.0000 |
+| Recall | 0.2272 |
+
+Interpretation: generic MediaPipe performs poorly on this side-above swimming view. This is now the floor that swim-specific pose backends must beat.
