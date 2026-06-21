@@ -6,6 +6,8 @@ import numpy as np
 from app.pose_landmarks import get_midpoint, horizontal_distance, vertical_distance
 from app.findings_robust import robust_findings_enabled, robust_peak
 from app.temporal_metrics import build_temporal_analysis
+from app.stroke_cycles import analyze_stroke_cycles, phase_analysis_enabled
+from app.technique_reference import compare_phase_technique, load_reference_bands
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +173,37 @@ def analyze_pose_data(
         normalized_stroke,
     )
     base["temporal_metrics"] = temporal_analysis
+
+    # Optional internal context only. With PHASE_ANALYSIS unset/false this
+    # branch is skipped and the existing analysis output remains unchanged.
+    if phase_analysis_enabled():
+        try:
+            phase_analysis = analyze_stroke_cycles(
+                pose_results=pose_results,
+                fps=fps if fps > 0 else 30.0,
+                stroke_type=normalized_stroke,
+            )
+            base["phase_analysis"] = phase_analysis
+            phase_context = {
+                "stroke_type": phase_analysis.get("stroke_type"),
+                "reference_status": "provisional_internal",
+                "validated": False,
+                "phase_context": [],
+            }
+            if phase_analysis.get("supported") and phase_analysis.get("cycles"):
+                reference = load_reference_bands(normalized_stroke)
+                phase_context = compare_phase_technique(
+                    pose_results=pose_results,
+                    phase_analysis=phase_analysis,
+                    reference_config=reference,
+                )
+            base["phase_context"] = phase_context
+        except Exception as phase_error:
+            logger.warning(
+                "[%s] Optional phase analysis skipped safely: %s",
+                video_upload_id,
+                phase_error,
+            )
 
     if detection_count < MIN_FRAMES_FOR_ANALYSIS or detection_ratio < MIN_DETECTION_RATIO:
         logger.warning(

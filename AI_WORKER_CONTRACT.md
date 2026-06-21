@@ -222,6 +222,23 @@ data.
 phase segments. These are not calibrated 3D angles, distances, velocities, or
 hydrodynamic measurements and must not be presented as such.
 
+## Optional Phase Analysis (internal, disabled by default)
+
+`PHASE_ANALYSIS` defaults to `false`. When unset or false, existing findings and
+callback fields are unchanged. When explicitly set to `true`, the worker may
+add two backwards-compatible optional fields:
+
+- `phase_analysis`: approximate breaststroke/freestyle cycles, phase ranges,
+  confidence, and quality flags
+- `phase_context`: persistent per-phase comparisons against replaceable
+  provisional internal bands
+
+Unsupported strokes and weak landmark tracks return no guessed cycles. The
+reference bands are marked `provisional_internal` and `validated: false`.
+These fields are internal AI-assisted draft context, not validated biomechanics
+measurements or automatic final coaching decisions. Coach review remains
+required.
+
 ## Internal Pose Landmark Schema
 
 The worker retains all 33 MediaPipe Pose landmarks internally, including face,

@@ -33,6 +33,7 @@ SAFE_TESTS: Sequence[Tuple[str, Sequence[str]]] = (
     ("SwimXYZ pipeline tools", ("scripts/test_swimxyz_pipeline_tools.py",)),
     ("Pose baseline reporting", ("scripts/test_pose_baseline_reporting.py",)),
     ("Backend truth evaluation", ("scripts/test_backend_truth_evaluation.py",)),
+    ("Phase analysis", ("scripts/test_phase_analysis_core.py",)),
     ("MMPose conversion self-test", ("scripts/swimxyz_to_mmpose.py", "--self-test")),
     ("Temporal metrics", ("scripts/test_temporal_metrics.py",)),
     ("Labelled evaluation", ("scripts/test_labelled_evaluation.py",)),

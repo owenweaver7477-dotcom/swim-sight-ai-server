@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "status": "provisional_internal",
+  "validated": false,
+  "stroke_type": "freestyle",
+  "description": "Replaceable internal bands for phase-analysis testing. They are not validated technique standards.",
+  "metrics": {
+    "hip_drop": {
+      "phases": {
+        "pull": {
+          "min": 0.0,
+          "max": 0.42,
+          "min_evidence_frames": 3,
+          "persistence_ratio": 0.5,
+          "high_deviation": 0.3,
+          "coach_language": "The body line appears to change during the pull; verify the hip position before sharing this draft finding."
+        }
+      }
+    },
+    "head_alignment": {
+      "phases": {
+        "recovery": {
+          "min": 0.0,
+          "max": 1.25,
+          "min_evidence_frames": 3,
+          "persistence_ratio": 0.5,
+          "high_deviation": 0.5,
+          "coach_language": "Head alignment appears outside the provisional recovery band; review the breathing moment on video."
+        }
+      }
+    }
+  }
+}
