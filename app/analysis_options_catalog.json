@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "labels": "AI-assisted draft / coach-approved; estimates flagged",
+  "plan_unlocks": {
+    "coach_studio": ["coach_studio"],
+    "ai_assist": ["coach_studio", "ai_assist"],
+    "club_pro": ["coach_studio", "ai_assist"],
+    "elite_lab": ["coach_studio", "ai_assist", "elite_lab"]
+  },
+  "panels": [
+    {
+      "id": "clip_details",
+      "title": "Clip details",
+      "options": [
+        {"id": "stroke", "label": "Stroke", "kind": "context", "control": "select", "tier": "coach_studio", "required": true, "choices": ["freestyle", "breaststroke", "backstroke", "butterfly", "im", "drill"]},
+        {"id": "camera_angle", "label": "Camera angle", "kind": "context", "control": "select", "tier": "coach_studio", "required": true, "choices": ["side", "front", "top_front", "above_water", "underwater"]},
+        {"id": "clip_start", "label": "Where the clip starts", "kind": "context", "control": "select", "tier": "coach_studio", "choices": ["dive_start", "off_wall_turn", "breakout", "mid_pool", "into_finish"]},
+        {"id": "course", "label": "Course", "kind": "context", "control": "select", "tier": "coach_studio", "choices": ["scm_25", "lcm_50", "unknown"]},
+        {"id": "lap_note", "label": "Lap / distance note", "kind": "context", "control": "text", "tier": "coach_studio"},
+        {"id": "review_type", "label": "Review type", "kind": "context", "control": "select", "tier": "coach_studio", "choices": ["technique", "race", "dryland"]}
+      ]
+    },
+    {
+      "id": "swimmer_scale",
+      "title": "Swimmer & scale",
+      "options": [
+        {"id": "swimmer_height_cm", "label": "Swimmer height (cm)", "kind": "input", "control": "number", "unit": "cm", "tier": "coach_studio", "provides": ["height_cm"]},
+        {"id": "swimmer_mass_kg", "label": "Swimmer mass (kg)", "kind": "input", "control": "number", "unit": "kg", "tier": "coach_studio", "provides": ["mass_kg"]},
+        {"id": "calibrate_known_distance", "label": "Calibrate with a known distance", "kind": "control", "control": "checkbox", "tier": "ai_assist", "provides": ["scale"]},
+        {"id": "pool_line_autocalibrate", "label": "Auto-calibrate from pool-bottom lines", "kind": "control", "control": "checkbox", "tier": "elite_lab", "provides": ["scale", "pool_calibration"], "estimate": true, "note": "needs an overhead/elevated angle"},
+        {"id": "pool_depth_m", "label": "Pool depth (m)", "kind": "input", "control": "number", "unit": "m", "tier": "elite_lab", "provides": ["pool_depth"]}
+      ]
+    },
+    {
+      "id": "faults",
+      "title": "What should the AI check?",
+      "options": [
+        {"id": "fault_body_line", "label": "Body line / streamline", "kind": "fault", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "fault_timing", "label": "Timing", "kind": "fault", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "fault_kick", "label": "Kick setup / drive", "kind": "fault", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "fault_head", "label": "Head position", "kind": "fault", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "fault_catch", "label": "Catch / hand entry", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_pull", "label": "Pull pathway", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_breath", "label": "Breath timing", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_heel_recovery", "label": "Heel recovery / knee width", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_foot_turn", "label": "Late foot turn", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_line_reset", "label": "Line reset / glide length", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_rotation", "label": "Rotation", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_body_wave", "label": "Body wave", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "fault_symmetry", "label": "Left/right symmetry", "kind": "fault", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "faults_select_all", "label": "Check everything relevant to this stroke", "kind": "control", "control": "checkbox", "tier": "coach_studio", "expands": "faults_all"}
+      ]
+    },
+    {
+      "id": "metrics",
+      "title": "Metrics to compute",
+      "options": [
+        {"id": "metric_stroke_rate", "label": "Stroke rate (SPM)", "kind": "metric", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "metric_stroke_count", "label": "Stroke count", "kind": "metric", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "metric_tempo_consistency", "label": "Tempo consistency", "kind": "metric", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "metric_dps", "label": "Distance per stroke", "kind": "metric", "control": "checkbox", "tier": "ai_assist", "requires": ["scale"]},
+        {"id": "metric_velocity", "label": "Velocity / split estimate", "kind": "metric", "control": "checkbox", "tier": "ai_assist", "requires": ["scale"], "estimate": true},
+        {"id": "metric_force", "label": "Propulsive force / power per stroke", "kind": "metric", "control": "checkbox", "tier": "ai_assist", "requires": ["scale", "mass_kg"], "estimate": true},
+        {"id": "metric_drag", "label": "Drag estimate", "kind": "metric", "control": "checkbox", "tier": "ai_assist", "requires": ["scale", "mass_kg"], "estimate": true},
+        {"id": "metric_phase_timing", "label": "Phase-timing breakdown", "kind": "metric", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "metric_absolute_position", "label": "Absolute position / breakout / 15m", "kind": "metric", "control": "checkbox", "tier": "elite_lab", "requires": ["pool_calibration"], "estimate": true},
+        {"id": "metric_splits", "label": "Per-length splits", "kind": "metric", "control": "checkbox", "tier": "elite_lab", "requires": ["pool_calibration"], "estimate": true}
+      ]
+    },
+    {
+      "id": "outputs",
+      "title": "Outputs",
+      "options": [
+        {"id": "out_findings", "label": "Draft findings + cues + drills", "kind": "output", "control": "checkbox", "tier": "coach_studio", "default": true},
+        {"id": "out_key_moments", "label": "Key moments / annotated frames", "kind": "output", "control": "checkbox", "tier": "coach_studio", "default": true},
+        {"id": "out_report", "label": "Shareable coach report", "kind": "output", "control": "checkbox", "tier": "coach_studio", "default": true},
+        {"id": "out_comparison", "label": "Before/after side-by-side", "kind": "output", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "out_share_clip", "label": "Shareable annotated clip", "kind": "output", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "out_reference_band", "label": "Good-technique reference overlay", "kind": "output", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "out_progress", "label": "Progress vs swimmer history", "kind": "output", "control": "checkbox", "tier": "ai_assist"},
+        {"id": "out_multi_angle", "label": "Multi-angle review", "kind": "output", "control": "checkbox", "tier": "elite_lab"},
+        {"id": "out_pdf", "label": "Branded PDF export", "kind": "output", "control": "checkbox", "tier": "elite_lab"}
+      ]
+    },
+    {
+      "id": "reliability",
+      "title": "How cautious should it be?",
+      "options": [
+        {"id": "mode", "label": "Analysis mode", "kind": "control", "control": "radio", "tier": "coach_studio", "choices": ["ai_draft", "manual_only"], "default": "ai_draft"},
+        {"id": "only_high_confidence", "label": "Only show high-confidence findings", "kind": "control", "control": "checkbox", "tier": "coach_studio"},
+        {"id": "show_confidence", "label": "Show confidence labels", "kind": "control", "control": "checkbox", "tier": "coach_studio", "locked_on": true, "default": true},
+        {"id": "flag_low_quality", "label": "Flag low-quality footage instead of guessing", "kind": "control", "control": "checkbox", "tier": "coach_studio", "locked_on": true, "default": true}
+      ]
+    }
+  ]
+}
