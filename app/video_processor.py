@@ -111,8 +111,13 @@ async def download_video(video_upload_id: str, signed_url: str) -> DownloadResul
         logger.info(f"[{video_upload_id}] Downloaded video: {size_mb:.1f} MB")
         return DownloadResult(path=path, file_size_mb=round(size_mb, 2))
 
-    except Exception as e:
-        logger.exception(f"[{video_upload_id}] Download error: {e}")
+    except Exception as error:
+        # HTTP exception strings can contain the full signed request URL.
+        logger.error(
+            "[%s] Download failed safely: error_type=%s",
+            video_upload_id,
+            type(error).__name__,
+        )
         return DownloadResult(
             failed_reason="download_error",
             quality_flags=["signed_url_download_failed"],
@@ -500,7 +505,11 @@ def extract_frames(
         return FrameExtractionResult(frames=frames, metadata=metadata)
 
     except Exception as error:
-        logger.exception(f"[{video_upload_id}] Controlled frame extraction failure: {error}")
+        logger.error(
+            "[%s] Controlled frame extraction failure: error_type=%s",
+            video_upload_id,
+            type(error).__name__,
+        )
         flags = set(metadata.get("quality_flags") or [])
         flags.add("frame_extraction_failed")
         metadata.update({

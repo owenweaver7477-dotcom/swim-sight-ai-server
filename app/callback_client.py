@@ -83,5 +83,9 @@ async def send_callback(
         return False
 
     except Exception as error:
-        logger.exception(f"Callback failed: {error}, summary={safe_summary}")
+        logger.error(
+            "Callback failed safely: error_type=%s, summary=%s",
+            type(error).__name__,
+            safe_summary,
+        )
         return False

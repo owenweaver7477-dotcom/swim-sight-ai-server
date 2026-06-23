@@ -29,6 +29,10 @@ SAFE_TESTS: Sequence[Tuple[str, Sequence[str]]] = (
     ("Temporal metrics", ("scripts/test_temporal_metrics.py",)),
     ("Labelled evaluation", ("scripts/test_labelled_evaluation.py",)),
     ("Durable queue configuration", ("scripts/test_durable_queue.py",)),
+    ("Worker health", ("scripts/test_worker_health.py",)),
+    ("Job timeout", ("scripts/test_job_timeout.py",)),
+    ("Job cancellation", ("scripts/test_job_cancellation.py",)),
+    ("Failure callback safety", ("scripts/test_failure_callback_safety.py",)),
 )
 
 

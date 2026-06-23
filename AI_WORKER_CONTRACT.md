@@ -32,10 +32,18 @@ Returns:
 
 ```json
 {
+  "ok": true,
+  "service": "swim-sight-ai-server",
+  "version": "pose-mvp-0.5",
+  "timestamp": "2026-06-23T00:00:00+00:00",
+  "heavy_models_loaded": false,
   "status": "ok",
   "engine": "pose-mvp-0.5"
 }
 ```
+
+This route is deliberately lightweight. It must not import pose backends,
+OpenCV, ONNX Runtime, baseline data, or video-processing modules.
 
 ### `POST /process-video`
 
@@ -86,6 +94,22 @@ Returns the worker job snapshot for local/debug visibility. With the default
 configuration this remains in memory. When the optional durable queue is
 enabled, the sanitized status snapshot is also read from Redis. Supabase remains
 the canonical application job record.
+
+### `POST /jobs/{job_id}/cancel`
+
+Internal server-to-server cancellation route protected by
+`x-ai-worker-secret`. Queued jobs become `cancelled`; running jobs become
+`cancel_requested`. Late completion updates cannot overwrite `cancelled` or
+`timed_out` terminal states. The response contains only job id, status, and a
+safe coach-facing message.
+
+## Reliability Timeout
+
+`AI_JOB_TIMEOUT_SECONDS` controls the worker processing deadline and defaults
+to 600 seconds. Timeout, cancellation, and worker failure callbacks contain a
+safe reason code, coach message, `manual_review_available: true`, and zero
+findings. They never include signed URLs, frames, landmarks, stack traces,
+private paths, anthropometrics, or secrets.
 
 ## Optional Durable Redis Queue
 

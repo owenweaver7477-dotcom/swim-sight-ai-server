@@ -29,6 +29,10 @@ def check_health(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     payload = response.json()
+    assert payload["ok"] is True
+    assert payload["service"] == "swim-sight-ai-server"
+    assert payload["version"] == worker.AI_ENGINE_VERSION
+    assert payload["heavy_models_loaded"] is False
     assert payload["status"] == "ok"
     assert payload["engine"] == worker.AI_ENGINE_VERSION
 

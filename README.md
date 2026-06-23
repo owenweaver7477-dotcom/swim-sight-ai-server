@@ -28,10 +28,19 @@ Example:
 
 ```json
 {
+  "ok": true,
+  "service": "swim-sight-ai-server",
+  "version": "pose-mvp-0.5",
+  "timestamp": "2026-06-23T00:00:00+00:00",
+  "heavy_models_loaded": false,
   "status": "ok",
   "engine": "pose-mvp-0.5"
 }
 ```
+
+The health route does not import OpenCV, MediaPipe, ONNX Runtime, video files,
+or baseline tooling. Blocking frame and pose work runs away from the FastAPI
+server loop so health checks remain responsive during analysis.
 
 ### `POST /process-video`
 
@@ -60,6 +69,13 @@ The accepted response is `202` with:
 Returns the current in-memory worker status for a recently accepted job.
 
 This endpoint is not durable storage. Supabase `ai_processing_jobs` remains the reliable job record.
+
+### `POST /jobs/{job_id}/cancel`
+
+Requests cancellation using the server-side `x-ai-worker-secret` header. Queued
+jobs become cancelled immediately. Processing jobs become `cancel_requested`
+and suppress completion after the current blocking stage returns. The app and
+Supabase remain the canonical cancellation record.
 
 ## Safety Rules
 
@@ -98,6 +114,17 @@ Required for callbacks. Must match the Vercel app value. Sent as `x-ai-webhook-s
 ### `PORT`
 
 Optional. Render provides this automatically.
+
+### `AI_JOB_TIMEOUT_SECONDS`
+
+Optional. Maximum worker processing time in seconds. Defaults to `600` (10
+minutes), with accepted values from 30 to 3600 seconds. Timed-out jobs return a
+safe manual-review callback with zero findings.
+
+Recommended Render service settings:
+
+- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Health check path: `/health`
 
 ## Local Development
 
