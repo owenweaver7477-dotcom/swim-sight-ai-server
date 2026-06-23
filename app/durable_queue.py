@@ -24,7 +24,14 @@ from app.models import VideoProcessingRequest
 
 logger = logging.getLogger(__name__)
 _TRUTHY = {"1", "true", "yes", "on"}
-TERMINAL_STATUSES = {"completed", "manual_review_recommended", "error"}
+TERMINAL_STATUSES = {
+    "completed",
+    "manual_review_recommended",
+    "failed",
+    "error",
+    "timed_out",
+    "cancelled",
+}
 
 
 def durable_queue_requested(env: Optional[Dict[str, str]] = None) -> bool:

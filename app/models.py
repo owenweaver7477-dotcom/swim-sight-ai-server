@@ -30,5 +30,10 @@ class VideoProcessingRequest(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    ok: bool
+    service: str
+    version: str
+    timestamp: str
+    heavy_models_loaded: bool
     status: str
     engine: str

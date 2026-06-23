@@ -3,21 +3,23 @@ load_dotenv()
 
 import os
 import asyncio
+import hmac
+import sys
 import uuid
 import time
 import logging
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
+from typing import Callable, Dict, Any, List, Optional, TypeVar
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException, status
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, status
 
 from app.models import VideoProcessingRequest, HealthResponse
-from app.video_processor import download_video, inspect_video, extract_frames, cleanup_temp_file
-from app.pose_estimator import run_pose_estimation
-from app.swim_analyzer import analyze_pose_data
-from app.callback_client import send_callback
-from app.utils import build_error_callback
 from app.durable_queue import DurableJobQueue
+from app.job_reliability import (
+    build_failure_callback,
+    failure_payload_is_safe,
+    job_timeout_seconds,
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -36,6 +38,8 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # ─────────────────────────────────────────────────────────────
 
 AI_ENGINE_VERSION = "pose-mvp-0.5"
+AI_JOB_TIMEOUT_SECONDS = job_timeout_seconds()
+T = TypeVar("T")
 
 app = FastAPI(
     title="Swim Sight AI Server",
@@ -57,6 +61,7 @@ def root():
         "docs": "/docs",
         "process_video": "/process-video",
         "job_status": "/jobs/{job_id}",
+        "job_cancel": "/jobs/{job_id}/cancel",
     }
 
 
@@ -67,7 +72,15 @@ def root_head():
 
 @app.get("/health", response_model=HealthResponse, status_code=status.HTTP_200_OK)
 def health_check():
-    return HealthResponse(status="ok", engine=AI_ENGINE_VERSION)
+    return HealthResponse(
+        ok=True,
+        service="swim-sight-ai-server",
+        version=AI_ENGINE_VERSION,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        heavy_models_loaded="app.pose_estimator" in sys.modules,
+        status="ok",
+        engine=AI_ENGINE_VERSION,
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -80,6 +93,12 @@ def health_check():
 
 JOBS: Dict[str, Dict[str, Any]] = {}
 DURABLE_QUEUE = DurableJobQueue()
+ACTIVE_BLOCKING_TASKS: Dict[str, asyncio.Task] = {}
+PROTECTED_TERMINAL_STATUSES = {"cancelled", "timed_out"}
+
+
+class JobCancelledError(RuntimeError):
+    """Raised between worker stages after a coach requests cancellation."""
 
 
 def now_iso() -> str:
@@ -87,13 +106,12 @@ def now_iso() -> str:
 
 
 def safe_request_summary(request: VideoProcessingRequest) -> Dict[str, Any]:
-    """Safe log summary. Never log signed_video_url."""
+    """Safe log summary containing no private URL fields."""
     return {
         "video_upload_id": getattr(request, "video_upload_id", None),
         "stroke_type": getattr(request, "stroke_type", None),
         "camera_angle": getattr(request, "camera_angle", None),
         "callback_url_present": bool(getattr(request, "callback_url", None)),
-        "signed_video_url_present": bool(getattr(request, "signed_video_url", None)),
     }
 
 
@@ -150,6 +168,19 @@ def update_job(
             "server_job_id": job_id,
             "created_at": now_iso(),
         }
+
+    existing_status = JOBS[job_id].get("status")
+    if existing_status in PROTECTED_TERMINAL_STATUSES and status_value != existing_status:
+        logger.info(
+            "[job=%s] Ignored late status update %s after %s",
+            job_id,
+            status_value,
+            existing_status,
+        )
+        return
+    if existing_status == "cancel_requested" and status_value not in {"cancel_requested", "cancelled"}:
+        logger.info("[job=%s] Ignored late status update after cancellation request", job_id)
+        return
 
     payload = {
         "status": status_value,
@@ -216,6 +247,77 @@ async def get_job(job_id: str):
     return job
 
 
+def job_cancel_requested(job_id: str) -> bool:
+    return JOBS.get(job_id, {}).get("status") in {"cancel_requested", "cancelled"}
+
+
+def ensure_job_active(job_id: str) -> None:
+    if job_cancel_requested(job_id):
+        raise JobCancelledError("AI cancellation requested")
+
+
+async def run_blocking(job_id: str, function: Callable[..., T], *args, **kwargs) -> T:
+    """Run CPU/blocking work away from the server loop so health stays responsive."""
+    ensure_job_active(job_id)
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    ACTIVE_BLOCKING_TASKS[job_id] = task
+    try:
+        result = await asyncio.shield(task)
+    finally:
+        if task.done():
+            ACTIVE_BLOCKING_TASKS.pop(job_id, None)
+    ensure_job_active(job_id)
+    return result
+
+
+def _worker_secret_valid(value: Optional[str]) -> bool:
+    expected = os.getenv("AI_WEBHOOK_SECRET", "")
+    return bool(expected and value and hmac.compare_digest(expected, value))
+
+
+@app.post("/jobs/{job_id}/cancel", status_code=status.HTTP_200_OK)
+async def cancel_job(
+    job_id: str,
+    x_ai_worker_secret: Optional[str] = Header(default=None),
+):
+    if not _worker_secret_valid(x_ai_worker_secret):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    job = JOBS.get(job_id)
+    if not job and DURABLE_QUEUE.ready:
+        job = await DURABLE_QUEUE.get_job(job_id)
+        if job:
+            JOBS[job_id] = job
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    current_status = job.get("status")
+    if current_status in {"completed", "manual_review_recommended", "failed", "error", "timed_out", "cancelled"}:
+        return {
+            "job_id": job_id,
+            "status": current_status,
+            "message": "This AI job is already in a final state.",
+        }
+
+    next_status = "cancelled" if current_status == "queued" else "cancel_requested"
+    update_job(
+        job_id=job_id,
+        status_value=next_status,
+        stage=next_status,
+        progress_percent=100 if next_status == "cancelled" else int(job.get("progress_percent") or 0),
+        message="AI cancellation requested. Continue with manual coach review.",
+        extra={"recommended_next_action": "manual_review_recommended"},
+    )
+    if DURABLE_QUEUE.ready:
+        await DURABLE_QUEUE.persist_job(dict(JOBS[job_id]))
+
+    return {
+        "job_id": job_id,
+        "status": next_status,
+        "message": "AI cancellation requested. Continue with manual coach review.",
+    }
+
+
 # ─────────────────────────────────────────────────────────────
 # Main Vercel entrypoint
 # ─────────────────────────────────────────────────────────────
@@ -278,11 +380,57 @@ async def run_analysis_pipeline(
     request: VideoProcessingRequest,
     job_id: str,
 ):
-    video_path = None
     started_at = time.time()
     stage_history: List[Dict[str, Any]] = []
+    try:
+        await asyncio.wait_for(
+            _run_analysis_pipeline(request, job_id, started_at, stage_history),
+            timeout=AI_JOB_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "[job=%s] AI job exceeded timeout_seconds=%s",
+            job_id,
+            AI_JOB_TIMEOUT_SECONDS,
+        )
+        await send_failure_result(
+            request=request,
+            job_id=job_id,
+            stage_history=stage_history,
+            started_at=started_at,
+            status_value="timed_out",
+            reason_code="worker_timeout",
+        )
+    except JobCancelledError:
+        await send_failure_result(
+            request=request,
+            job_id=job_id,
+            stage_history=stage_history,
+            started_at=started_at,
+            status_value="cancelled",
+            reason_code="cancelled_by_user",
+        )
+
+
+async def _run_analysis_pipeline(
+    request: VideoProcessingRequest,
+    job_id: str,
+    started_at: float,
+    stage_history: List[Dict[str, Any]],
+):
+    video_path = None
 
     try:
+        from app.pose_backends import run_pose_estimation_backend
+        from app.swim_analyzer import analyze_pose_data
+        from app.video_processor import (
+            cleanup_temp_file,
+            download_video,
+            extract_frames,
+            inspect_video,
+        )
+
+        ensure_job_active(job_id)
         add_stage(
             stage_history,
             job_id,
@@ -326,14 +474,13 @@ async def run_analysis_pipeline(
             return
 
         if not video_path:
-            await send_error_result(
+            await send_failure_result(
                 request=request,
                 job_id=job_id,
                 stage_history=stage_history,
                 started_at=started_at,
-                error_message="Failed to download video from signed URL.",
-                stage_message="Video download failed",
-                quality_flags=["signed_url_download_failed"],
+                status_value="failed",
+                reason_code="video_download_failed",
             )
             return
 
@@ -355,7 +502,9 @@ async def run_analysis_pipeline(
             "Reading video metadata and workload risk",
         )
 
-        video_metadata = inspect_video(
+        video_metadata = await run_blocking(
+            job_id,
+            inspect_video,
             video_path,
             video_upload_id=request.video_upload_id,
             filename=getattr(request, "original_filename", None),
@@ -419,7 +568,9 @@ async def run_analysis_pipeline(
             {"processing_tier": video_metadata.get("processing_tier")},
         )
 
-        extraction = extract_frames(
+        extraction = await run_blocking(
+            job_id,
+            extract_frames,
             video_path,
             video_upload_id=request.video_upload_id,
             filename=getattr(request, "original_filename", None),
@@ -486,7 +637,7 @@ async def run_analysis_pipeline(
             },
         )
 
-        pose_results = run_pose_estimation(frames)
+        pose_results = await run_blocking(job_id, run_pose_estimation_backend, frames)
 
         if not pose_results:
             await send_manual_review_result(
@@ -553,7 +704,9 @@ async def run_analysis_pipeline(
             },
         )
 
-        analysis_payload = analyze_pose_data(
+        analysis_payload = await run_blocking(
+            job_id,
+            analyze_pose_data,
             pose_results=pose_results,
             frames=frames,
             fps=fps,
@@ -740,6 +893,8 @@ async def run_analysis_pipeline(
             "Sending result back to Swim Sight 3D",
         )
 
+        ensure_job_active(job_id)
+        from app.callback_client import send_callback
         callback_ok = await send_callback(request.callback_url, analysis_payload)
 
         final_status = (
@@ -782,26 +937,46 @@ async def run_analysis_pipeline(
             f"callback_ok={callback_ok}, duration={processing_duration}s"
         )
 
+    except JobCancelledError:
+        raise
     except Exception as error:
-        logger.exception(f"[{request.video_upload_id}] Pipeline failed")
+        logger.error(
+            "[%s] Pipeline failed with %s",
+            request.video_upload_id,
+            type(error).__name__,
+        )
 
-        await send_error_result(
+        await send_failure_result(
             request=request,
             job_id=job_id,
             stage_history=stage_history,
             started_at=started_at,
-            error_message=f"Internal processing error: {str(error)}",
-            stage_message="Internal processing error",
-            quality_flags=["processing_error"],
+            status_value="failed",
+            reason_code="unknown_worker_failure",
         )
 
     finally:
         if video_path:
-            cleanup_temp_file(video_path)
+            blocking_task = ACTIVE_BLOCKING_TASKS.get(job_id)
+            if blocking_task and not blocking_task.done():
+                def cleanup_after_blocking(_task):
+                    ACTIVE_BLOCKING_TASKS.pop(job_id, None)
+                    cleanup_temp_file(video_path)
+                blocking_task.add_done_callback(cleanup_after_blocking)
+            else:
+                ACTIVE_BLOCKING_TASKS.pop(job_id, None)
+                cleanup_temp_file(video_path)
 
 
 @app.on_event("startup")
 async def start_durable_queue() -> None:
+    logger.info(
+        "Worker ready: engine=%s timeout_seconds=%s durable_queue_requested=%s pose_backend=%s",
+        AI_ENGINE_VERSION,
+        AI_JOB_TIMEOUT_SECONDS,
+        DURABLE_QUEUE.requested,
+        os.getenv("POSE_BACKEND", "mediapipe"),
+    )
     if DURABLE_QUEUE.requested:
         await DURABLE_QUEUE.start(run_analysis_pipeline)
 
@@ -815,68 +990,65 @@ async def stop_durable_queue() -> None:
 # Callback helpers
 # ─────────────────────────────────────────────────────────────
 
-async def send_error_result(
+async def send_failure_result(
     request: VideoProcessingRequest,
     job_id: str,
     stage_history: List[Dict[str, Any]],
     started_at: float,
-    error_message: str,
-    stage_message: str,
-    quality_flags: Optional[List[str]] = None,
+    status_value: str,
+    reason_code: str,
 ):
     processing_duration = round(time.time() - started_at, 2)
-    flags = quality_flags or ["processing_error"]
-
+    failure_payload = build_failure_callback(
+        video_upload_id=request.video_upload_id,
+        job_id=job_id,
+        status=status_value,
+        reason_code=reason_code,
+        engine=AI_ENGINE_VERSION,
+        processing_duration_seconds=processing_duration,
+        stage_history=stage_history,
+    )
     add_stage(
         stage_history,
         job_id,
-        "error",
-        "error",
+        status_value,
+        status_value,
         100,
-        stage_message,
+        failure_payload["coach_message"],
         {
-            "error_message": error_message,
+            "error_message": failure_payload["coach_message"],
+            "reason_code": failure_payload["reason_code"],
             "processing_duration_seconds": processing_duration,
-            "quality_flags": flags,
+            "quality_flags": failure_payload["quality_flags"],
         },
     )
-
-    error_payload = build_error_callback(
-        request.video_upload_id,
-        error_message,
+    failure_payload = build_failure_callback(
+        video_upload_id=request.video_upload_id,
+        job_id=job_id,
+        status=status_value,
+        reason_code=reason_code,
+        engine=AI_ENGINE_VERSION,
+        processing_duration_seconds=processing_duration,
+        stage_history=stage_history,
     )
-
-    error_payload.update({
-        "job_id": job_id,
-        "server_job_id": job_id,
-        "video_upload_id": request.video_upload_id,
-        "engine": AI_ENGINE_VERSION,
-        "status": "error",
-        "analysis_mode": "manual_review",
-        "real_pose_detected": False,
-        "findings": [],
-        "overall_score": None,
-        "phase_breakdown": {},
-        "drag_analysis": [],
-        "stage_history": stage_history,
-        "processing_duration_seconds": processing_duration,
-        "pose_reliability": "failed",
-        "quality_flags": flags,
-        "recommended_next_action": "manual_review_recommended",
-        "detection_ratio": 0,
-    })
-
-    callback_ok = await send_callback(request.callback_url, error_payload)
+    if not failure_payload_is_safe(failure_payload):
+        logger.error("[job=%s] Unsafe failure callback blocked", job_id)
+        callback_ok = False
+    else:
+        from app.callback_client import send_callback
+        callback_ok = await send_callback(request.callback_url, failure_payload)
 
     update_job(
         job_id=job_id,
-        status_value="error",
-        stage="error",
+        status_value=status_value,
+        stage=status_value,
         progress_percent=100,
-        message="Error callback sent" if callback_ok else "Error callback failed",
+        message="Failure callback sent" if callback_ok else "Failure callback failed",
         extra={
             "callback_sent": callback_ok,
-            "error_message": error_message,
+            "error_message": failure_payload["coach_message"],
+            "reason_code": failure_payload["reason_code"],
+            "manual_review_available": True,
         },
     )
 
@@ -918,6 +1090,12 @@ async def send_manual_review_result(
         "video_upload_id": request.video_upload_id,
         "engine": AI_ENGINE_VERSION,
         "status": "manual_review_recommended",
+        "reason_code": "insufficient_pose_confidence",
+        "coach_message": (
+            error_message
+            or "The system did not find enough reliable evidence to produce a coach-ready AI draft."
+        ),
+        "manual_review_available": True,
         "analysis_mode": "manual_review",
         "real_pose_detected": False,
         "findings": [],
@@ -963,6 +1141,7 @@ async def send_manual_review_result(
         },
     }
 
+    from app.callback_client import send_callback
     callback_ok = await send_callback(request.callback_url, payload)
 
     update_job(
