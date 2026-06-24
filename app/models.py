@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class VideoProcessingRequest(BaseModel):
@@ -23,6 +23,14 @@ class VideoProcessingRequest(BaseModel):
     review_context: Optional[Dict[str, Any]] = None
     max_sampled_frames: Optional[int] = None
     downscale_frames: Optional[bool] = None
+    analysis_mode: Optional[str] = None
+    selected_report_outputs: Optional[List[str]] = None
+    athlete_profile_readiness: Optional[Dict[str, Any]] = None
+    estimate_only_outputs: Optional[List[str]] = None
+    estimated_credit_cost: Optional[int] = None
+    coach_confirmed_draft_ai: Optional[bool] = None
+    calibration_available: Optional[bool] = None
+    pool_length_m: Optional[float] = None
     # Optional coach-entered anthropometrics (server-side only). Used to scale
     # pose tracking and estimate drag/force. Never echoed in the callback.
     swimmer_height_cm: Optional[float] = None

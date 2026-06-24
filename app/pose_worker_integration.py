@@ -312,7 +312,7 @@ def analyse_clip(pose_results: List[Dict[str, Any]],
 
     # Step 9: drag + drag-to-weight always; net/propulsive only when confident.
     payload: Dict[str, Any] = {
-        "label": "estimated_drag",
+        "label": "Estimated drag force - coach review required",
         "basis": f"estimated ({scale_basis} scale from MediaPipe pose) -- not measured",
         "pose_source": "mediapipe_pose",
         "stroke": pose_key,

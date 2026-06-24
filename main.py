@@ -20,6 +20,11 @@ from app.job_reliability import (
     failure_payload_is_safe,
     job_timeout_seconds,
 )
+from app.report_outputs import (
+    attach_report_output_metadata,
+    build_report_output_plan,
+    filter_findings_for_outputs,
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -419,6 +424,7 @@ async def _run_analysis_pipeline(
     stage_history: List[Dict[str, Any]],
 ):
     video_path = None
+    output_plan = build_report_output_plan(request)
 
     try:
         from app.pose_backends import run_pose_estimation_backend
@@ -715,6 +721,7 @@ async def _run_analysis_pipeline(
             camera_angle=request.camera_angle or "Unknown",
             video_upload_id=request.video_upload_id,
         )
+        analysis_payload = filter_findings_for_outputs(analysis_payload, output_plan)
 
         analysis_mode = analysis_payload.get("analysis_mode", "placeholder")
         real_pose_detected = bool(analysis_payload.get("real_pose_detected"))
@@ -833,7 +840,7 @@ async def _run_analysis_pipeline(
         # is skipped, so the worker behaves EXACTLY as before: no estimated_drag
         # field, no height/mass output, no extra error path, no blocked analysis,
         # and no change to the manual-review fallback.
-        if os.getenv("ENABLE_ESTIMATED_DRAG", "false").strip().lower() in ("1", "true", "yes", "on"):
+        if "estimated_drag_force" in output_plan.get("accepted_outputs", []):
             try:
                 from app.pose_worker_integration import (
                     should_emit_estimated_drag,
@@ -866,6 +873,8 @@ async def _run_analysis_pipeline(
                 logger.warning(
                     f"[{request.video_upload_id}] estimated_drag skipped: {drag_error}"
                 )
+
+        analysis_payload = attach_report_output_metadata(analysis_payload, output_plan)
 
         add_stage(
             stage_history,
@@ -1031,6 +1040,10 @@ async def send_failure_result(
         processing_duration_seconds=processing_duration,
         stage_history=stage_history,
     )
+    failure_payload = attach_report_output_metadata(
+        failure_payload,
+        build_report_output_plan(request),
+    )
     if not failure_payload_is_safe(failure_payload):
         logger.error("[job=%s] Unsafe failure callback blocked", job_id)
         callback_ok = False
@@ -1140,6 +1153,7 @@ async def send_manual_review_result(
             "quality_flags": flags,
         },
     }
+    payload = attach_report_output_metadata(payload, build_report_output_plan(request))
 
     from app.callback_client import send_callback
     callback_ok = await send_callback(request.callback_url, payload)

@@ -19,6 +19,7 @@ from app.analysis_options import (  # noqa: E402
     load_catalog,
     plan_analysis,
 )
+from app.report_outputs import build_report_output_plan  # noqa: E402
 
 _passed = 0
 _failed = 0
@@ -105,6 +106,16 @@ check("honesty rule present", "looks fine" in r["ai_instructions"]["prompt_text"
 check("confidence labels locked on", r["context"].get("show_confidence") in (True, "true"))
 r = plan_analysis({"camera_angle": "side"}, plan="coach_studio")
 check("missing stroke warns", any("stroke" in w for w in r["warnings"]))
+
+# Phase 4 report-output contract stays independent from the older checklist.
+output_request = type("Request", (), {
+    "selected_report_outputs": ["body_line_analysis", "unknown_metric"],
+    "camera_angle": "Side",
+    "athlete_profile_readiness": {},
+})()
+output_plan = build_report_output_plan(output_request, env={})
+check("report outputs: supported output accepted", output_plan["accepted_outputs"] == ["body_line_analysis"])
+check("report outputs: unknown output skipped", output_plan["skipped_outputs"][0]["id"] == "unknown_metric")
 
 print(f"\n{_passed} passed, {_failed} failed")
 sys.exit(1 if _failed else 0)

@@ -31,7 +31,7 @@
   ],
   "drag_analysis": [],
   "estimated_drag": {
-    "label": "estimated_drag",
+    "label": "Estimated drag force - coach review required",
     "basis": "estimated (monocular anthropometric scale from MediaPipe pose) -- not measured",
     "pose_source": "mediapipe_pose",
     "stroke": "freestyle",

@@ -73,6 +73,14 @@ Recommended request fields:
 - `review_context`
 - `max_sampled_frames`
 - `downscale_frames`
+- `analysis_mode` (the coach-selected report preset)
+- `selected_report_outputs`
+- `athlete_profile_readiness`
+- `estimate_only_outputs`
+- `estimated_credit_cost`
+- `coach_confirmed_draft_ai`
+- `calibration_available`
+- `pool_length_m`
 - `swimmer_height_cm` (optional; server-side only, drives drag estimate)
 - `swimmer_mass_kg` (optional; server-side only, drives drag estimate)
 
@@ -87,6 +95,21 @@ Accepted response:
 - `engine`
 
 The endpoint must return quickly with `202 Accepted`. Heavy processing runs in the background.
+
+### Structured report-output selection
+
+New app requests can name the report outputs the coach selected. The worker
+revalidates those IDs and returns safe metadata in final/manual/failure
+callbacks:
+
+- `requested_outputs`
+- `completed_outputs`
+- `skipped_outputs` (`id` and safe reason only)
+- `estimate_only_outputs`
+
+Unknown and unavailable outputs are skipped explicitly. Legacy requests with no
+selection preserve the existing analysis path. Athlete profile inputs and
+calibration details are never echoed in this metadata or in callbacks.
 
 ### `GET /jobs/{job_id}`
 
@@ -265,11 +288,13 @@ When `ENABLE_ESTIMATED_DRAG` is unset or false, the worker behaves exactly as
 before: no `estimated_drag` field, no height/mass output, no extra error path,
 no blocked analysis, and no change to the manual-review fallback.
 
-When `ENABLE_ESTIMATED_DRAG=true`, the block is included only when real pose was
-detected, the analysis is `real_pose` (not a manual-review fallback), and the
-request supplied `swimmer_height_cm` and `swimmer_mass_kg`. It is best-effort and
-never blocks the callback. Values are an ESTIMATE derived from monocular pose
-scale, not a measurement.
+When `ENABLE_ESTIMATED_DRAG=true`, the block is included only when the coach
+explicitly requested `estimated_drag_force`, real pose was detected, the
+analysis is `real_pose` (not a manual-review fallback), the request supplied
+`swimmer_height_cm` and `swimmer_mass_kg`, a scale-calibration readiness flag is
+present, and the clip is side view. It is best-effort and never blocks the
+callback. Values remain an ESTIMATE requiring coach interpretation, not a
+measurement.
 
 Always present when the block is included:
 
@@ -297,7 +322,7 @@ the baseline harness (`scripts/evaluate_baseline.py`).
 | `ENABLE_POSE_SMOOTHING` | `false` | Temporal stabilisation of sampled tracks: short-gap interpolation, single-frame outlier removal, jitter smoothing. Interpolated points do not inflate the detection count. |
 | `ROBUST_FINDINGS` | `false` | Draft findings must be sustained across frames (not a single spike); strength reported as a percentile. Fewer false positives. |
 | `SEQUENTIAL_FRAME_READ` | `false` | Decode the processing window in one forward pass instead of per-frame seeks. Faster on long-GOP video; no accuracy change. |
-| `ENABLE_ESTIMATED_DRAG` | `false` | Pilot anthropometric drag block (see above). Requires `swimmer_height_cm` + `swimmer_mass_kg`. |
+| `ENABLE_ESTIMATED_DRAG` | `false` | Pilot anthropometric drag block (see above). Requires explicit output selection, side view, athlete inputs, and calibration readiness. |
 | `ENABLE_WAVE_DRAG` | `false` | Experimental near-surface Froude wave-drag. Helper math only — NOT auto-applied, because reliable depth needs calibration a monocular camera lacks. |
 
 All of these preserve the `/process-video` contract, the quality gate, and the
