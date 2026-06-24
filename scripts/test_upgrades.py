@@ -33,6 +33,7 @@ SAFE_TESTS: Sequence[Tuple[str, Sequence[str]]] = (
     ("Job timeout", ("scripts/test_job_timeout.py",)),
     ("Job cancellation", ("scripts/test_job_cancellation.py",)),
     ("Failure callback safety", ("scripts/test_failure_callback_safety.py",)),
+    ("Report output selection", ("scripts/test_report_outputs.py",)),
 )
 
 
