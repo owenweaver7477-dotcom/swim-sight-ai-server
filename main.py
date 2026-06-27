@@ -25,6 +25,7 @@ from app.report_outputs import (
     build_report_output_plan,
     filter_findings_for_outputs,
 )
+from app.video_storage import has_video_access_method, safe_video_access_summary
 
 
 # ─────────────────────────────────────────────────────────────
@@ -117,6 +118,7 @@ def safe_request_summary(request: VideoProcessingRequest) -> Dict[str, Any]:
         "stroke_type": getattr(request, "stroke_type", None),
         "camera_angle": getattr(request, "camera_angle", None),
         "callback_url_present": bool(getattr(request, "callback_url", None)),
+        "video_access": safe_video_access_summary(request),
     }
 
 
@@ -341,8 +343,8 @@ async def process_video(
     if not request.video_upload_id:
         raise HTTPException(status_code=400, detail="Missing video_upload_id")
 
-    if not request.signed_video_url:
-        raise HTTPException(status_code=400, detail="Missing signed_video_url")
+    if not has_video_access_method(request):
+        raise HTTPException(status_code=400, detail="Missing private video access method")
 
     if not request.callback_url:
         raise HTTPException(status_code=400, detail="Missing callback_url")
@@ -431,9 +433,13 @@ async def _run_analysis_pipeline(
         from app.swim_analyzer import analyze_pose_data
         from app.video_processor import (
             cleanup_temp_file,
-            download_video,
             extract_frames,
             inspect_video,
+        )
+        from app.video_storage import download_video_for_request
+        from app.video_probe import (
+            build_frame_sampling_plan,
+            probe_video_file,
         )
 
         ensure_job_active(job_id)
@@ -452,10 +458,7 @@ async def _run_analysis_pipeline(
             },
         )
 
-        download_result = await download_video(
-            video_upload_id=request.video_upload_id,
-            signed_url=request.signed_video_url,
-        )
+        download_result = await download_video_for_request(request)
         video_path = download_result.path
 
         if download_result.manual_review_reason:
@@ -498,6 +501,70 @@ async def _run_analysis_pipeline(
             20,
             "Private video downloaded",
         )
+
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "probing_video_metadata",
+            22,
+            "Probing video metadata",
+        )
+
+        video_probe = await run_blocking(
+            job_id,
+            probe_video_file,
+            video_path,
+            file_size_mb=download_result.file_size_mb,
+        )
+        metadata_callback_ok = await send_video_probe_progress_result(
+            request=request,
+            job_id=job_id,
+            status_value="metadata_ready",
+            video_probe=video_probe,
+        )
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "metadata_ready",
+            24,
+            "Video metadata summary prepared",
+            {
+                "metadata_callback_sent": metadata_callback_ok,
+                "metadata_complete": bool((video_probe.get("video_metadata") or {}).get("metadata_complete")),
+                "metadata_warnings": video_probe.get("warnings") or [],
+                "metadata_errors": video_probe.get("errors") or [],
+            },
+        )
+
+        frame_sampling = build_frame_sampling_plan(
+            video_probe.get("video_metadata") or {},
+            sampling_rate_fps=5,
+            max_sampled_frames=getattr(request, "max_sampled_frames", None) or 300,
+        )
+        if frame_sampling.get("ok"):
+            frames_callback_ok = await send_video_probe_progress_result(
+                request=request,
+                job_id=job_id,
+                status_value="frames_sampled",
+                video_probe=video_probe,
+                frame_sampling=frame_sampling,
+            )
+            add_stage(
+                stage_history,
+                job_id,
+                "running",
+                "frames_sampled",
+                26,
+                "Frame timestamp sampling plan prepared",
+                {
+                    "frames_callback_sent": frames_callback_ok,
+                    "sampling_rate_fps": frame_sampling.get("sampling_rate_fps"),
+                    "planned_sample_count": frame_sampling.get("total_sampled_frames"),
+                    "sampling_warnings": frame_sampling.get("warnings") or [],
+                },
+            )
 
         add_stage(
             stage_history,
@@ -660,6 +727,97 @@ async def _run_analysis_pipeline(
                 ),
             )
             return
+
+        from app.pose_2d_engine import (
+            build_pose_2d_summary,
+            pose_results_to_pose_2d_frames,
+            write_pose_2d_artifact,
+        )
+
+        pose_2d_frames = await run_blocking(
+            job_id,
+            pose_results_to_pose_2d_frames,
+            pose_results,
+            frame_sampling=frame_sampling,
+            fps=fps,
+            view_type=request.camera_angle or "Unknown",
+        )
+        pose_2d_summary = build_pose_2d_summary(
+            pose_2d_frames,
+            view_type=request.camera_angle or "Unknown",
+            sampled_frames=frame_sampling.get("total_sampled_frames") if frame_sampling else len(frames),
+        )
+        pose_artifact = await run_blocking(
+            job_id,
+            write_pose_2d_artifact,
+            pose_2d_frames,
+            job_id,
+        )
+        pose_callback_ok = await send_pose_2d_progress_result(
+            request=request,
+            job_id=job_id,
+            pose_summary=pose_2d_summary,
+            pose_artifact=pose_artifact,
+        )
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "pose_2d_ready",
+            62,
+            "2D pose tracking summary prepared",
+            {
+                "pose_2d_callback_sent": pose_callback_ok,
+                "pose_2d_tracked_frames": pose_2d_summary.get("trackedFrames"),
+                "pose_2d_partial_frames": pose_2d_summary.get("partialFrames"),
+                "pose_2d_failed_frames": pose_2d_summary.get("failedFrames"),
+                "pose_2d_average_confidence": pose_2d_summary.get("averageFrameConfidence"),
+            },
+        )
+
+        from app.pose_3d_lifter import (
+            build_pose_3d_summary,
+            lift_pose_2d_frames_to_3d,
+            write_pose_3d_artifact,
+        )
+
+        pose_3d_frames = await run_blocking(
+            job_id,
+            lift_pose_2d_frames_to_3d,
+            pose_2d_frames,
+            input_pose_model=pose_2d_summary.get("model") or "mediapipe_pose",
+        )
+        pose_3d_summary = build_pose_3d_summary(
+            pose_3d_frames,
+            input_pose_model=pose_2d_summary.get("model") or "mediapipe_pose",
+        )
+        pose_3d_artifact = await run_blocking(
+            job_id,
+            write_pose_3d_artifact,
+            pose_3d_frames,
+            job_id,
+        )
+        pose_3d_callback_ok = await send_pose_3d_progress_result(
+            request=request,
+            job_id=job_id,
+            pose_summary=pose_3d_summary,
+            pose_artifact=pose_3d_artifact,
+        )
+        add_stage(
+            stage_history,
+            job_id,
+            "running",
+            "pose_3d_estimated",
+            66,
+            "Estimated monocular 3D pose summary prepared",
+            {
+                "pose_3d_callback_sent": pose_3d_callback_ok,
+                "pose_3d_estimated_frames": pose_3d_summary.get("estimatedFrames"),
+                "pose_3d_partial_frames": pose_3d_summary.get("partialFrames"),
+                "pose_3d_failed_frames": pose_3d_summary.get("failedFrames"),
+                "pose_3d_measurement_type": pose_3d_summary.get("measurementType"),
+            },
+        )
 
         # Optional temporal stabilisation of the sampled pose tracks
         # (ENABLE_POSE_SMOOTHING): interpolate short gaps, drop single-frame
@@ -998,6 +1156,113 @@ async def stop_durable_queue() -> None:
 # ─────────────────────────────────────────────────────────────
 # Callback helpers
 # ─────────────────────────────────────────────────────────────
+
+async def send_video_probe_progress_result(
+    request: VideoProcessingRequest,
+    job_id: str,
+    status_value: str,
+    video_probe: Dict[str, Any],
+    frame_sampling: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Send an additive metadata/frame-sampling progress callback.
+
+    This is best-effort and deliberately non-terminal: callback delivery failure
+    must not stop the existing pose/manual-review pipeline.
+    """
+    ensure_job_active(job_id)
+    from app.callback_client import send_callback
+    from app.video_probe import (
+        build_video_probe_callback_payload,
+        callback_payload_is_safe,
+    )
+
+    payload = build_video_probe_callback_payload(
+        request=request,
+        job_id=job_id,
+        status_value=status_value,
+        video_probe=video_probe,
+        frame_sampling=frame_sampling,
+        engine=AI_ENGINE_VERSION,
+    )
+
+    if not callback_payload_is_safe(payload):
+        logger.error("[job=%s] Unsafe video probe callback blocked", job_id)
+        return False
+
+    callback_ok = await send_callback(request.callback_url, payload)
+    if not callback_ok:
+        logger.warning(
+            "[job=%s] Video probe progress callback was not accepted: status=%s",
+            job_id,
+            status_value,
+        )
+    return callback_ok
+
+
+async def send_pose_2d_progress_result(
+    request: VideoProcessingRequest,
+    job_id: str,
+    pose_summary: Dict[str, Any],
+    pose_artifact: Dict[str, Any],
+) -> bool:
+    """Send the safe `pose_2d_ready` progress callback."""
+    ensure_job_active(job_id)
+    from app.callback_client import send_callback
+    from app.pose_2d_engine import (
+        build_pose_2d_callback_payload,
+        pose_2d_callback_payload_is_safe,
+    )
+
+    payload = build_pose_2d_callback_payload(
+        request=request,
+        job_id=job_id,
+        pose_summary=pose_summary,
+        pose_artifact=pose_artifact,
+        engine=AI_ENGINE_VERSION,
+    )
+
+    if not pose_2d_callback_payload_is_safe(payload):
+        logger.error("[job=%s] Unsafe pose_2d_ready callback blocked", job_id)
+        return False
+
+    callback_ok = await send_callback(request.callback_url, payload)
+    if not callback_ok:
+        logger.warning("[job=%s] pose_2d_ready callback was not accepted", job_id)
+    return callback_ok
+
+
+async def send_pose_3d_progress_result(
+    request: VideoProcessingRequest,
+    job_id: str,
+    pose_summary: Dict[str, Any],
+    pose_artifact: Dict[str, Any],
+) -> bool:
+    """Send the safe `pose_3d_estimated` progress callback."""
+    ensure_job_active(job_id)
+    from app.callback_client import send_callback
+    from app.pose_3d_lifter import (
+        build_pose_3d_callback_payload,
+        pose_3d_callback_payload_is_safe,
+    )
+
+    payload = build_pose_3d_callback_payload(
+        request=request,
+        job_id=job_id,
+        pose_summary=pose_summary,
+        pose_artifact=pose_artifact,
+        engine=AI_ENGINE_VERSION,
+    )
+
+    if not pose_3d_callback_payload_is_safe(payload):
+        logger.error("[job=%s] Unsafe pose_3d_estimated callback blocked", job_id)
+        return False
+
+    callback_ok = await send_callback(request.callback_url, payload)
+    if not callback_ok:
+        logger.warning("[job=%s] pose_3d_estimated callback was not accepted", job_id)
+    return callback_ok
+
 
 async def send_failure_result(
     request: VideoProcessingRequest,

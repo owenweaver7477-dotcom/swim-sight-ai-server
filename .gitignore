@@ -7,5 +7,14 @@ main_placeholder_backup.py
 samples/videos/*
 !samples/videos/.gitkeep
 samples/labels.local.json
+baseline_data/
 baseline_reports/*
 !baseline_reports/.gitkeep
+backend_eval_reports/
+pose_artifacts/
+work_dirs/
+export/
+*.onnx
+*.pth
+*.mp4
+*.webm

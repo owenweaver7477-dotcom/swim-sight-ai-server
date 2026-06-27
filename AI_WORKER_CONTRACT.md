@@ -47,13 +47,20 @@ OpenCV, ONNX Runtime, baseline data, or video-processing modules.
 
 ### `POST /process-video`
 
-Current production analysis entrypoint. Vercel calls this route after creating an `ai_processing_jobs` row and generating a short-lived Supabase signed URL.
+Current production analysis entrypoint. Vercel calls this route after creating
+an `ai_processing_jobs` row. The current Render-compatible path still sends a
+short-lived Supabase signed URL. The worker also accepts provider/key storage
+identifiers so future Modal/RunPod workers can use direct private object access.
 
 Required request fields:
 
 - `video_upload_id`
-- `signed_video_url`
 - `callback_url`
+
+One usable private video access method is required:
+
+- `signed_video_url` for the current short-lived Render compatibility path, or
+- `storage_provider` plus `video_key` for provider-based storage access.
 
 Recommended request fields:
 
@@ -62,6 +69,9 @@ Recommended request fields:
 - `club_id`
 - `swimmer_id`
 - `uploaded_by_user_id`
+- `storage_provider`
+- `video_key`
+- `signed_video_url_expires_in_seconds`
 - `stroke_type`
 - `analysis_type`
 - `camera_angle`
@@ -95,6 +105,78 @@ Accepted response:
 - `engine`
 
 The endpoint must return quickly with `202 Accepted`. Heavy processing runs in the background.
+
+## Job-Based Async Processing Contract
+
+The Vercel app creates the durable `ai_processing_jobs` row before calling the
+worker. The app/database state is the source of truth for coach UI, retries,
+cancellation, report linking, and manual fallback.
+
+Current request payload shape:
+
+```json
+{
+  "job_id": "app-job-uuid",
+  "app_job_id": "app-job-uuid",
+  "video_upload_id": "video-upload-uuid",
+  "storage_provider": "supabase_private",
+  "video_key": "private-storage-key-or-file-id",
+  "signed_video_url": "short-lived-private-url",
+  "signed_video_url_expires_in_seconds": 900,
+  "stroke_type": "Freestyle",
+  "camera_angle": "Side",
+  "review_context": {},
+  "selected_report_outputs": [],
+  "callback_url": "https://app.example/api/ai/callback"
+}
+```
+
+Future provider-compatible payload shape:
+
+```json
+{
+  "job_id": "app-job-uuid",
+  "storage_provider": "supabase_private",
+  "video_key": "private-storage-key-or-file-id",
+  "analysis_options": {
+    "model_tier": "mediapipe_fast",
+    "extract_fps_cap": 60,
+    "detect_stroke_phases": true,
+    "generate_pdf_draft": false
+  },
+  "callback": {
+    "target": "vercel_app",
+    "action": "ai_callback"
+  }
+}
+```
+
+Accepted response:
+
+```json
+{
+  "accepted": true,
+  "job_id": "app-job-uuid",
+  "server_job_id": "worker-job-id",
+  "status": "queued",
+  "stage": "queued"
+}
+```
+
+The worker may expose local status through `GET /jobs/{job_id}`, but the app
+continues polling Supabase job state. Completion callbacks must include
+`job_id` or `app_job_id`, `video_upload_id`, `status`, safe output metadata, and
+coach-review framing. Failure callbacks must include a safe reason code, a
+coach-safe message, and `manual_review_available: true`.
+
+Worker logs and callbacks must never include signed URLs, private storage
+paths, callback secrets, environment variables, raw landmarks, frame arrays,
+height/mass in public-facing payloads, stack traces, or internal calibration
+details.
+
+Modal, RunPod, S3, SQS, and other GPU/storage providers can plug into this
+contract later by accepting the same `job_id`, returning a fast accepted
+response, and reporting completion/failure through the same callback shape.
 
 ### Structured report-output selection
 
@@ -165,7 +247,10 @@ Future model upgrades may add `/analyse` as a cleaner alias, but it should not r
 
 ## Request Privacy
 
-`signed_video_url` is intentionally present in the worker request, but it must never be logged, echoed, persisted, or returned in a callback.
+`signed_video_url` may be present in the worker request, but it must never be
+logged, echoed, persisted, or returned in a callback. `video_key` is also an
+internal private object identifier; logs may show only the storage provider and a
+redacted key/hash.
 
 Safe logs may include:
 
@@ -179,6 +264,8 @@ Safe logs may include:
 - processing tier
 - sampled frame count
 - stage/progress
+- storage provider
+- redacted storage key/hash
 
 Unsafe logs include:
 
@@ -186,7 +273,33 @@ Unsafe logs include:
 - URL tokens
 - webhook secret values
 - private storage paths
+- full `video_key` values
 - auth tokens
+
+## Worker Storage Access Adapter
+
+The worker accepts these storage inputs:
+
+```json
+{
+  "storage_provider": "supabase_private",
+  "video_key": "club/swimmer/video/object.mp4",
+  "signed_video_url": "optional-short-lived-fallback"
+}
+```
+
+Current behavior:
+
+- If `signed_video_url` is present, the worker uses it as the active Render path.
+- If `storage_provider` and `video_key` are present, the request is accepted.
+- `supabase_private` can use provider-native access when `SUPABASE_URL` and a
+  service key are configured on the worker.
+- `s3_private` and `gcs_private` are reserved adapter labels for future
+  Modal/RunPod/S3/GCS work and fail safely until configured.
+
+Provider/key-only failures must return safe failure/manual-review callbacks. They
+must not expose private keys, service credentials, signed URLs, local paths, or
+storage internals to the app UI or shared reports.
 
 ## Adaptive Processing Tiers
 
@@ -200,6 +313,271 @@ The worker inspects video metadata before heavy processing and selects one of:
 The selected tier may change sampling width, sampled frame count, and processing window. File size alone is not the only signal; resolution, duration, FPS, frame count, and metadata reliability matter.
 
 If the tier is `manual_review_required`, or extraction/pose processing is not reliable enough, the worker must send manual review with zero AI findings.
+
+## Video Probe Progress Callbacks
+
+Before pose processing, the worker sends additive progress callbacks when video
+metadata can be inspected. These callbacks are safe worker/app coordination
+messages; they are not public report output and they do not contain raw video,
+signed URLs, local paths, raw frames, pose landmarks, 3D data, force values, or
+drag estimates.
+
+The worker first sends `metadata_ready` after probing the downloaded temporary
+video with `ffprobe` when available, falling back to OpenCV metadata when
+needed:
+
+```json
+{
+  "job_id": "worker-or-app-job-id",
+  "app_job_id": "app-job-id",
+  "server_job_id": "worker-or-app-job-id",
+  "video_upload_id": "video-upload-id",
+  "engine": "pose-mvp-0.5",
+  "status": "metadata_ready",
+  "video_metadata": {
+    "duration_seconds": 42.5,
+    "fps": 60.0,
+    "frame_count": 2550,
+    "width": 1920,
+    "height": 1080,
+    "aspect_ratio": 1.7778,
+    "codec": "h264",
+    "container": "mp4",
+    "file_size_mb": 146.2,
+    "orientation": "landscape",
+    "metadata_complete": true,
+    "probe_source": "ffprobe",
+    "warnings": [],
+    "errors": []
+  },
+  "warnings": [],
+  "errors": []
+}
+```
+
+It then sends `frames_sampled` after building a timestamp-only sampling plan.
+This does not extract or upload frame images:
+
+```json
+{
+  "job_id": "worker-or-app-job-id",
+  "app_job_id": "app-job-id",
+  "server_job_id": "worker-or-app-job-id",
+  "video_upload_id": "video-upload-id",
+  "engine": "pose-mvp-0.5",
+  "status": "frames_sampled",
+  "video_metadata": { "...": "same safe metadata shape" },
+  "frame_sampling": {
+    "ok": true,
+    "sampling_rate_fps": 5.0,
+    "source_fps": 60.0,
+    "max_sampled_frames": 300,
+    "total_sampled_frames": 213,
+    "duration_seconds": 42.5,
+    "samples": [
+      {
+        "sampleIndex": 0,
+        "sourceFrameIndex": 0,
+        "timestampMs": 0,
+        "status": "scheduled"
+      }
+    ],
+    "warnings": [],
+    "errors": []
+  },
+  "warnings": [],
+  "errors": []
+}
+```
+
+Progress callback delivery is best-effort. If the app rejects one of these
+non-terminal callbacks, the worker continues the existing analysis/manual-review
+pipeline and the final callback remains authoritative.
+
+## 2D Pose Progress Callback
+
+After sampled frames are read and the configured pose backend runs, the worker
+sends a `pose_2d_ready` progress callback. The current model path is the default
+MediaPipe Pose backend (`mediapipe_pose`, BlazePose 33 landmarks). This callback
+contains only a safe summary and private artifact metadata; it does not contain
+raw pose frame arrays.
+
+Stable 2D pose frame shape inside the private worker artifact:
+
+```json
+{
+  "timestamp_ms": 4000,
+  "source_frame_index": 240,
+  "sample_index": 20,
+  "view_type": "side",
+  "pose_model": "mediapipe_pose",
+  "joints_2d": {
+    "left_shoulder": {
+      "x": 0.42,
+      "y": 0.31,
+      "confidence": 0.91,
+      "visibility": 0.91,
+      "status": "tracked"
+    }
+  },
+  "frame_confidence": 0.76,
+  "tracking_status": "partial"
+}
+```
+
+Joint status values are `tracked`, `low_confidence`, `missing`,
+`interpolated`, and `not_visible`. Phase 5 does not interpolate; missing joints
+remain missing. Frame tracking statuses are `tracked`, `partial`, `failed`, and
+`no_person_detected`.
+
+Safe `pose_2d_ready` callback shape:
+
+```json
+{
+  "job_id": "worker-or-app-job-id",
+  "app_job_id": "app-job-id",
+  "server_job_id": "worker-or-app-job-id",
+  "video_upload_id": "video-upload-id",
+  "engine": "pose-mvp-0.5",
+  "status": "pose_2d_ready",
+  "stage": "pose_2d_ready",
+  "progress_percent": 62,
+  "pose_2d_summary": {
+    "availabilityState": "pose_2d_ready",
+    "ok": true,
+    "model": "mediapipe_pose",
+    "modelVersion": "blazepose_33",
+    "sampledFrames": 213,
+    "processedFrames": 213,
+    "trackedFrames": 184,
+    "partialFrames": 22,
+    "failedFrames": 7,
+    "averageFrameConfidence": 0.74,
+    "lowConfidenceJointRate": 0.18,
+    "viewType": "side",
+    "warnings": []
+  },
+  "pose_artifact": {
+    "artifact_type": "pose_2d_timeseries",
+    "storage_visibility": "private",
+    "format": "json",
+    "frame_count": 213,
+    "contains_raw_pose": true,
+    "contains_video_pixels": false,
+    "public_safe": false
+  },
+  "warnings": []
+}
+```
+
+Until private artifact storage is added, the worker may write raw pose
+timeseries locally for tests or internal debugging. The callback must never
+include the local path. Shared/public reports must not expose raw pose arrays or
+pose artifacts.
+
+## Monocular Estimated 3D Pose Callback
+
+After the private 2D pose timeseries is available, the worker may build a
+single-view estimated 3D pose timeseries using the heuristic lifter. This is not
+calibrated multi-view 3D, not measured world geometry, and not a public report
+output. It is a private internal artifact for future biomechanics work.
+
+Current method:
+
+- `source: "monocular_estimate"`
+- `method: "anatomical_heuristic_lift"`
+- `measurementType: "estimated"`
+- `pose3dModel: "anatomical_heuristic_lift_v1"`
+- coordinate system: `hip_centered_relative`
+- scale: `relative_body_units`
+
+Private 3D pose frame shape inside the worker artifact:
+
+```json
+{
+  "timestamp_ms": 4000,
+  "source_frame_index": 240,
+  "sample_index": 20,
+  "view_type": "Side",
+  "source": "monocular_estimate",
+  "method": "anatomical_heuristic_lift",
+  "measurementType": "estimated",
+  "pose_model": "mediapipe_pose",
+  "pose_3d_model": "anatomical_heuristic_lift_v1",
+  "joints_3d": {
+    "left_shoulder": {
+      "x": 0.12,
+      "y": 1.42,
+      "z": -0.08,
+      "confidence": 0.76,
+      "source_2d_confidence": 0.91,
+      "status": "estimated"
+    }
+  },
+  "frame_confidence": 0.7,
+  "tracking_status": "partial"
+}
+```
+
+Safe `pose_3d_estimated` callback shape:
+
+```json
+{
+  "job_id": "worker-or-app-job-id",
+  "app_job_id": "app-job-id",
+  "server_job_id": "worker-or-app-job-id",
+  "video_upload_id": "video-upload-id",
+  "engine": "pose-mvp-0.5",
+  "status": "pose_3d_estimated",
+  "stage": "pose_3d_estimated",
+  "progress_percent": 66,
+  "pose_3d_summary": {
+    "availabilityState": "pose_3d_estimated",
+    "ok": true,
+    "source": "monocular_estimate",
+    "method": "anatomical_heuristic_lift",
+    "measurementType": "estimated",
+    "pose3dModel": "anatomical_heuristic_lift_v1",
+    "inputPoseModel": "mediapipe_pose",
+    "inputFrames": 213,
+    "estimatedFrames": 184,
+    "partialFrames": 22,
+    "failedFrames": 7,
+    "averageFrameConfidence": 0.68,
+    "coordinateSystem": "hip_centered_relative",
+    "scale": "relative_body_units",
+    "calibration": {
+      "cameraCalibrated": false,
+      "worldScaleKnown": false,
+      "multiView": false
+    },
+    "assumptions": [
+      "single-view depth estimated from 2D pose sequence",
+      "coordinates are relative body units, not measured metres",
+      "z-depth is inferred from anatomical constraints and temporal smoothing"
+    ],
+    "warnings": []
+  },
+  "pose_3d_artifact": {
+    "artifact_type": "pose_3d_timeseries",
+    "storage_visibility": "private",
+    "format": "json",
+    "frame_count": 213,
+    "contains_raw_pose": true,
+    "contains_video_pixels": false,
+    "public_safe": false,
+    "source": "monocular_estimate",
+    "measurementType": "estimated"
+  },
+  "warnings": []
+}
+```
+
+The callback must never include raw `joints_3d`, raw `joints_2d`, frame images,
+signed URLs, local artifact paths, storage paths, biomechanics frames, force
+frames, or drag estimates. Phase 7 can use the private 3D artifact as input for
+biomechanics calculations, but public report exposure still requires a separate
+safe summary and coach approval.
 
 ## Callback Route
 
@@ -343,12 +721,17 @@ Progress/status-stage values may include:
 - `running`
 - `downloading_video`
 - `downloaded_video`
+- `probing_video_metadata`
+- `metadata_ready`
+- `frames_sampled`
 - `reading_video_metadata`
 - `metadata_read`
 - `processing_tier_selected`
 - `extracting_frames`
 - `frames_extracted`
 - `running_pose_detection`
+- `pose_2d_ready`
+- `pose_3d_estimated`
 - `analysing_stroke_phases`
 - `generating_findings`
 - `generating_outputs`

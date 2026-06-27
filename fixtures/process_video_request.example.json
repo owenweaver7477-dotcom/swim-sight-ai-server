@@ -5,6 +5,8 @@
   "club_id": "33333333-3333-4333-8333-333333333333",
   "swimmer_id": "44444444-4444-4444-8444-444444444444",
   "uploaded_by_user_id": "55555555-5555-4555-8555-555555555555",
+  "storage_provider": "supabase_private",
+  "video_key": "redacted-club/redacted-swimmer/redacted-video/private-video.mp4",
   "signed_video_url": "https://signed-url-redacted.example/private-video.mp4",
   "stroke_type": "breaststroke",
   "analysis_type": "Technique Review",

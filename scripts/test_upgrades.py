@@ -34,6 +34,11 @@ SAFE_TESTS: Sequence[Tuple[str, Sequence[str]]] = (
     ("Job cancellation", ("scripts/test_job_cancellation.py",)),
     ("Failure callback safety", ("scripts/test_failure_callback_safety.py",)),
     ("Report output selection", ("scripts/test_report_outputs.py",)),
+    ("Video probe callbacks", ("scripts/test_video_probe.py",)),
+    ("Pose 2D engine", ("scripts/test_pose_2d_engine.py",)),
+    ("Pose 3D lifter", ("scripts/test_pose_3d_lifter.py",)),
+    ("Video storage adapter", ("scripts/test_video_storage_adapter.py",)),
+    ("Worker storage access", ("scripts/test_worker_storage_access.py",)),
 )
 
 

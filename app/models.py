@@ -9,7 +9,9 @@ class VideoProcessingRequest(BaseModel):
     club_id: Optional[str] = None
     swimmer_id: Optional[str] = None
     uploaded_by_user_id: Optional[str] = None
-    signed_video_url: str
+    signed_video_url: Optional[str] = None
+    storage_provider: Optional[str] = None
+    video_key: Optional[str] = None
     stroke_type: str = "Freestyle"
     analysis_type: Optional[str] = "Technique Review"
     camera_angle: Optional[str] = "Side"

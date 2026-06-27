@@ -24,6 +24,7 @@ FAILURE_MESSAGES = {
 ALLOWED_FAILURE_STATUSES = {"failed", "timed_out", "cancelled"}
 UNSAFE_KEYS = {
     "signed_video_url",
+    "video_key",
     "video_url",
     "file_path",
     "private_path",

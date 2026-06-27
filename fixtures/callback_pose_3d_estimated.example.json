@@ -1,0 +1,50 @@
+{
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "app_job_id": "11111111-1111-4111-8111-111111111111",
+  "server_job_id": "11111111-1111-4111-8111-111111111111",
+  "video_upload_id": "22222222-2222-4222-8222-222222222222",
+  "engine": "pose-mvp-0.5",
+  "status": "pose_3d_estimated",
+  "stage": "pose_3d_estimated",
+  "progress_percent": 66,
+  "pose_3d_summary": {
+    "availabilityState": "pose_3d_estimated",
+    "ok": true,
+    "source": "monocular_estimate",
+    "method": "anatomical_heuristic_lift",
+    "measurementType": "estimated",
+    "pose3dModel": "anatomical_heuristic_lift_v1",
+    "inputPoseModel": "mediapipe_pose",
+    "inputFrames": 213,
+    "estimatedFrames": 184,
+    "partialFrames": 22,
+    "failedFrames": 7,
+    "averageFrameConfidence": 0.68,
+    "coordinateSystem": "hip_centered_relative",
+    "scale": "relative_body_units",
+    "calibration": {
+      "cameraCalibrated": false,
+      "worldScaleKnown": false,
+      "multiView": false
+    },
+    "assumptions": [
+      "single-view depth estimated from 2D pose sequence",
+      "coordinates are relative body units, not measured metres",
+      "z-depth is inferred from anatomical constraints and temporal smoothing"
+    ],
+    "warnings": []
+  },
+  "pose_3d_artifact": {
+    "artifact_type": "pose_3d_timeseries",
+    "artifact_id": "11111111-1111-4111-8111-111111111111-pose-3d",
+    "storage_visibility": "private",
+    "format": "json",
+    "frame_count": 213,
+    "contains_raw_pose": true,
+    "contains_video_pixels": false,
+    "public_safe": false,
+    "source": "monocular_estimate",
+    "measurementType": "estimated"
+  },
+  "warnings": []
+}

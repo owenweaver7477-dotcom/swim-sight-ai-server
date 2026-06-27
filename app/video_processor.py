@@ -58,14 +58,23 @@ def sanitize_url_for_logs(url: Optional[str]) -> str:
     return "[redacted-url]"
 
 
-async def download_video(video_upload_id: str, signed_url: str) -> DownloadResult:
+async def download_video(
+    video_upload_id: str,
+    signed_url: str,
+    headers: Optional[Dict[str, str]] = None,
+    source_label: str = "signed_url",
+) -> DownloadResult:
     """
     Download private signed video URL to a temporary file.
 
     Does not log the signed URL or token.
     """
     try:
-        logger.info(f"[{video_upload_id}] Downloading private video for AI processing")
+        logger.info(
+            "[%s] Downloading private video for AI processing via %s",
+            video_upload_id,
+            source_label,
+        )
 
         max_bytes = MAX_DOWNLOAD_MB * 1024 * 1024
         downloaded = 0
@@ -74,7 +83,7 @@ async def download_video(video_upload_id: str, signed_url: str) -> DownloadResul
             path = tmp.name
 
             async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-                async with client.stream("GET", signed_url) as response:
+                async with client.stream("GET", signed_url, headers=headers) as response:
                     if response.status_code != 200:
                         logger.error(
                             f"[{video_upload_id}] Download failed: HTTP {response.status_code}"

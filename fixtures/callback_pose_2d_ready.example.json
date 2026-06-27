@@ -1,0 +1,36 @@
+{
+  "job_id": "11111111-1111-4111-8111-111111111111",
+  "app_job_id": "11111111-1111-4111-8111-111111111111",
+  "server_job_id": "11111111-1111-4111-8111-111111111111",
+  "video_upload_id": "22222222-2222-4222-8222-222222222222",
+  "engine": "pose-mvp-0.5",
+  "status": "pose_2d_ready",
+  "stage": "pose_2d_ready",
+  "progress_percent": 62,
+  "pose_2d_summary": {
+    "availabilityState": "pose_2d_ready",
+    "ok": true,
+    "model": "mediapipe_pose",
+    "modelVersion": "blazepose_33",
+    "sampledFrames": 213,
+    "processedFrames": 213,
+    "trackedFrames": 184,
+    "partialFrames": 22,
+    "failedFrames": 7,
+    "averageFrameConfidence": 0.74,
+    "lowConfidenceJointRate": 0.18,
+    "viewType": "side",
+    "warnings": []
+  },
+  "pose_artifact": {
+    "artifact_type": "pose_2d_timeseries",
+    "artifact_id": "11111111-1111-4111-8111-111111111111-pose-2d",
+    "storage_visibility": "private",
+    "format": "json",
+    "frame_count": 213,
+    "contains_raw_pose": true,
+    "contains_video_pixels": false,
+    "public_safe": false
+  },
+  "warnings": []
+}
