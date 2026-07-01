@@ -406,10 +406,31 @@ the baseline harness (`scripts/evaluate_baseline.py`).
 | `SEQUENTIAL_FRAME_READ` | `false` | Decode the processing window in one forward pass instead of per-frame seeks. Faster on long-GOP video; no accuracy change. |
 | `ENABLE_ESTIMATED_DRAG` | `false` | Pilot anthropometric drag block (see above). Requires explicit output selection, side view, athlete inputs, and calibration readiness. |
 | `ENABLE_WAVE_DRAG` | `false` | Experimental near-surface Froude wave-drag. Helper math only — NOT auto-applied, because reliable depth needs calibration a monocular camera lacks. |
+| `EXTENDED_STROKE_FINDINGS` | `false` | Experimental extra backstroke/butterfly draft findings (see below). 2D heuristic, coach-review-required. Off by default; needs labelled-clip validation before enabling. |
 
 All of these preserve the `/process-video` contract, the quality gate, and the
 manual-review fallback. Each is wrapped so a failure falls back to current
 behaviour rather than breaking analysis.
+
+### `EXTENDED_STROKE_FINDINGS` (experimental, default off)
+
+Backstroke and butterfly currently emit only one draft finding each. When
+`EXTENDED_STROKE_FINDINGS=true`, the worker adds four more draft findings that
+**reuse the existing 2D signal helpers** already used for freestyle/breaststroke
+(no new biomechanics, no new callback fields):
+
+- `backstroke_dropped_catch` — reuses the dropped-elbow catch signal.
+- `backstroke_short_extension` — reuses the short-entry-extension signal.
+- `butterfly_body_line_loss` — reuses the shoulder-to-hip body-line signal.
+- `butterfly_breath_timing` — reuses the head-lift signal.
+
+These are **2D-heuristic, coach-review-required** draft evidence only — not
+objective, not biomechanical scoring, not velocity/split/DPS/3D/calibrated
+angles. They pass through the same `_make_finding` path, so the callback finding
+shape is unchanged, and through the same confidence/quality gate and
+manual-review fallback. With the flag off (default), backstroke/butterfly
+behaviour is exactly as before. **Validate on labelled clips** (thresholds and
+false-positive rate) before enabling in production, one stroke at a time.
 
 ## Callback Statuses
 

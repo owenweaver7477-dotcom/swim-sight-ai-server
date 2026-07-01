@@ -74,6 +74,11 @@ that every optional flag is enabled.
   must not appear in shared reports until validated and coach-approved.
 - Estimated drag remains an internal prototype and is inactive because
   `ENABLE_ESTIMATED_DRAG=false`.
+- Extended backstroke/butterfly draft findings are deployed but inactive because
+  `EXTENDED_STROKE_FINDINGS=false`. They reuse existing 2D signal helpers, are
+  coach-review-required, and change no callback shape or scoring while off. They
+  are 2D-heuristic only (not biomechanical/velocity/split/3D) and must be
+  validated on labelled clips before enabling, one stroke at a time.
 
 ## 3. Inactive Capabilities and Prerequisites
 

@@ -5,6 +5,7 @@ import numpy as np
 
 from app.pose_estimator import get_midpoint, horizontal_distance, vertical_distance
 from app.findings_robust import robust_findings_enabled, robust_peak
+from app.findings_flags import extended_stroke_findings_enabled
 from app.temporal_metrics import build_temporal_analysis
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,26 @@ DRILL_CUE_MAP = {
         "cue": "Let the body wave set the timing before forcing the arms.",
         "drill": "Body dolphin into single-stroke butterfly",
         "next_focus": "Rhythm and body wave",
+    },
+    "backstroke_dropped_catch": {
+        "cue": "Set the forearm early and keep pressure on the water through the catch.",
+        "drill": "Backstroke single-arm with an early-catch pause",
+        "next_focus": "Catch setup",
+    },
+    "backstroke_short_extension": {
+        "cue": "Reach long past the shoulder before starting the pull.",
+        "drill": "Backstroke single-arm with a front-quadrant reach",
+        "next_focus": "Entry and extension",
+    },
+    "butterfly_body_line_loss": {
+        "cue": "Keep the hips near the surface so the body wave stays long.",
+        "drill": "Body dolphin holding a high hip line",
+        "next_focus": "Body line and wave",
+    },
+    "butterfly_breath_timing": {
+        "cue": "Breathe low and early with the chin close to the water, without lifting the head high.",
+        "drill": "Butterfly with a low, early breath every third stroke",
+        "next_focus": "Breathing timing",
     },
 }
 
@@ -451,54 +472,169 @@ def _freestyle_findings(detected_frames: List[Dict[str, Any]], fps: float) -> Li
 
 
 def _backstroke_findings(detected_frames: List[Dict[str, Any]], fps: float) -> List[Dict[str, Any]]:
-    body_line = _body_line_signal(detected_frames, fps, threshold=1.52)
-    if not body_line or body_line["count"] < 8:
-        return []
+    findings: List[Dict[str, Any]] = []
 
-    return [_make_finding(
-        fault_tag="backstroke_hip_sink",
-        stroke="Backstroke",
-        phase="body_line",
-        severity="High" if body_line["strength"] >= 1.82 else "Medium",
-        confidence_score=_confidence_from_strength(body_line["strength"], 1.52, 2.00, body_line["count"]),
-        frame=_frame_at_timestamp(detected_frames, body_line["timestamp"], fps),
-        timestamp_seconds=body_line["timestamp"],
-        observation="The hips appear to sit low relative to the shoulder line in the sampled frames.",
-        why_it_matters=(
-            "Backstroke speed depends on a supported body line so the kick and rotation can stay connected."
-        ),
-        keypoints_used=["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
-        evidence_note=(
-            f"Peak shoulder-to-hip vertical offset was {body_line['strength']:.2f} "
-            f"across {body_line['count']} usable pose frames."
-        ),
-        quality_flags=[],
-    )]
+    body_line = _body_line_signal(detected_frames, fps, threshold=1.52)
+    if body_line and body_line["count"] >= 8:
+        findings.append(_make_finding(
+            fault_tag="backstroke_hip_sink",
+            stroke="Backstroke",
+            phase="body_line",
+            severity="High" if body_line["strength"] >= 1.82 else "Medium",
+            confidence_score=_confidence_from_strength(body_line["strength"], 1.52, 2.00, body_line["count"]),
+            frame=_frame_at_timestamp(detected_frames, body_line["timestamp"], fps),
+            timestamp_seconds=body_line["timestamp"],
+            observation="The hips appear to sit low relative to the shoulder line in the sampled frames.",
+            why_it_matters=(
+                "Backstroke speed depends on a supported body line so the kick and rotation can stay connected."
+            ),
+            keypoints_used=["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
+            evidence_note=(
+                f"Peak shoulder-to-hip vertical offset was {body_line['strength']:.2f} "
+                f"across {body_line['count']} usable pose frames."
+            ),
+            quality_flags=[],
+        ))
+
+    # Experimental additional backstroke findings (EXTENDED_STROKE_FINDINGS,
+    # default off). 2D heuristic, coach-review-required, reusing existing signal
+    # helpers. Off by default => backstroke behaviour is unchanged.
+    if extended_stroke_findings_enabled():
+        findings.extend(_backstroke_extended_findings(detected_frames, fps))
+
+    return findings
+
+
+def _backstroke_extended_findings(detected_frames: List[Dict[str, Any]], fps: float) -> List[Dict[str, Any]]:
+    """Experimental backstroke findings reusing existing 2D signal helpers."""
+    findings: List[Dict[str, Any]] = []
+
+    catch = _dropped_elbow_signal(detected_frames, fps)
+    if catch and catch["count"] >= 6:
+        findings.append(_make_finding(
+            fault_tag="backstroke_dropped_catch",
+            stroke="Backstroke",
+            phase="catch_setup",
+            severity="High" if catch["strength"] >= 0.16 else "Medium",
+            confidence_score=_confidence_from_strength(catch["strength"], 0.10, 0.22, catch["count"]),
+            frame=_frame_at_timestamp(detected_frames, catch["timestamp"], fps),
+            timestamp_seconds=catch["timestamp"],
+            observation="The elbow appears to drop close to or below the wrist during the backstroke catch.",
+            why_it_matters=(
+                "A dropped elbow can reduce the early hold on the water and make the pull less connected."
+            ),
+            keypoints_used=["left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist"],
+            evidence_note=(
+                f"Peak elbow-wrist catch signal was {catch['strength']:.2f} in the sampled pose."
+            ),
+            quality_flags=[],
+        ))
+
+    extension = _short_extension_signal(detected_frames, fps)
+    if extension and extension["count"] >= 6:
+        findings.append(_make_finding(
+            fault_tag="backstroke_short_extension",
+            stroke="Backstroke",
+            phase="entry_extension",
+            severity="Medium",
+            confidence_score=_confidence_from_strength(extension["strength"], 0.12, 0.28, extension["count"]),
+            frame=_frame_at_timestamp(detected_frames, extension["timestamp"], fps),
+            timestamp_seconds=extension["timestamp"],
+            observation="The lead hand appears to start the pull before a clear extension past the shoulder.",
+            why_it_matters=(
+                "A short entry can shorten the stroke and reduce the time available to set the catch."
+            ),
+            keypoints_used=["left_shoulder", "right_shoulder", "left_wrist", "right_wrist"],
+            evidence_note=(
+                f"Lead wrist extension stayed close to the shoulder line across {extension['count']} sampled frames."
+            ),
+            quality_flags=[],
+        ))
+
+    return findings
 
 
 def _butterfly_findings(detected_frames: List[Dict[str, Any]], fps: float) -> List[Dict[str, Any]]:
-    rhythm = _butterfly_rhythm_signal(detected_frames, fps)
-    if not rhythm or rhythm["count"] < 8:
-        return []
+    findings: List[Dict[str, Any]] = []
 
-    return [_make_finding(
-        fault_tag="butterfly_rhythm_break",
-        stroke="Butterfly",
-        phase="body_wave",
-        severity="High" if rhythm["strength"] >= 0.18 else "Medium",
-        confidence_score=_confidence_from_strength(rhythm["strength"], 0.10, 0.24, rhythm["count"]),
-        frame=_frame_at_timestamp(detected_frames, rhythm["timestamp"], fps),
-        timestamp_seconds=rhythm["timestamp"],
-        observation="The shoulder and hip line appears to change unevenly through the sampled rhythm.",
-        why_it_matters=(
-            "Butterfly timing is easier to sustain when the body wave and arm recovery stay connected."
-        ),
-        keypoints_used=["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
-        evidence_note=(
-            f"Body-wave timing signal was {rhythm['strength']:.2f} across sampled pose frames."
-        ),
-        quality_flags=[],
-    )]
+    rhythm = _butterfly_rhythm_signal(detected_frames, fps)
+    if rhythm and rhythm["count"] >= 8:
+        findings.append(_make_finding(
+            fault_tag="butterfly_rhythm_break",
+            stroke="Butterfly",
+            phase="body_wave",
+            severity="High" if rhythm["strength"] >= 0.18 else "Medium",
+            confidence_score=_confidence_from_strength(rhythm["strength"], 0.10, 0.24, rhythm["count"]),
+            frame=_frame_at_timestamp(detected_frames, rhythm["timestamp"], fps),
+            timestamp_seconds=rhythm["timestamp"],
+            observation="The shoulder and hip line appears to change unevenly through the sampled rhythm.",
+            why_it_matters=(
+                "Butterfly timing is easier to sustain when the body wave and arm recovery stay connected."
+            ),
+            keypoints_used=["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
+            evidence_note=(
+                f"Body-wave timing signal was {rhythm['strength']:.2f} across sampled pose frames."
+            ),
+            quality_flags=[],
+        ))
+
+    # Experimental additional butterfly findings (EXTENDED_STROKE_FINDINGS,
+    # default off). 2D heuristic, coach-review-required, reusing existing signal
+    # helpers. Off by default => butterfly behaviour is unchanged.
+    if extended_stroke_findings_enabled():
+        findings.extend(_butterfly_extended_findings(detected_frames, fps))
+
+    return findings
+
+
+def _butterfly_extended_findings(detected_frames: List[Dict[str, Any]], fps: float) -> List[Dict[str, Any]]:
+    """Experimental butterfly findings reusing existing 2D signal helpers."""
+    findings: List[Dict[str, Any]] = []
+
+    body_line = _body_line_signal(detected_frames, fps, threshold=1.60)
+    if body_line and body_line["count"] >= 8:
+        findings.append(_make_finding(
+            fault_tag="butterfly_body_line_loss",
+            stroke="Butterfly",
+            phase="body_wave",
+            severity="High" if body_line["strength"] >= 1.90 else "Medium",
+            confidence_score=_confidence_from_strength(body_line["strength"], 1.60, 2.05, body_line["count"]),
+            frame=_frame_at_timestamp(detected_frames, body_line["timestamp"], fps),
+            timestamp_seconds=body_line["timestamp"],
+            observation="The hips appear to drop below the shoulder line through the sampled body wave.",
+            why_it_matters=(
+                "A low hip line can break the body wave and add resistance between strokes."
+            ),
+            keypoints_used=["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
+            evidence_note=(
+                f"Peak shoulder-to-hip vertical offset was {body_line['strength']:.2f} "
+                f"across {body_line['count']} usable pose frames."
+            ),
+            quality_flags=[],
+        ))
+
+    breath = _head_lift_signal(detected_frames, fps, threshold=-0.40)
+    if breath and breath["count"] >= 8:
+        findings.append(_make_finding(
+            fault_tag="butterfly_breath_timing",
+            stroke="Butterfly",
+            phase="breathing",
+            severity="High" if breath["strength"] >= 0.60 else "Medium",
+            confidence_score=_confidence_from_strength(breath["strength"], 0.40, 0.72, breath["count"]),
+            frame=_frame_at_timestamp(detected_frames, breath["timestamp"], fps),
+            timestamp_seconds=breath["timestamp"],
+            observation="The head appears to lift high out of the line during the breath.",
+            why_it_matters=(
+                "Lifting the head high to breathe can drop the hips and interrupt the butterfly rhythm."
+            ),
+            keypoints_used=["nose", "left_shoulder", "right_shoulder"],
+            evidence_note=(
+                f"Head lift signal was {breath['strength']:.2f} torso units in the strongest sampled frame."
+            ),
+            quality_flags=[],
+        ))
+
+    return findings
 
 
 def _make_finding(
@@ -941,6 +1077,10 @@ def _title_from_fault(fault_tag: str) -> str:
         "breathing_line_break": "Breathing Line Break",
         "backstroke_hip_sink": "Backstroke Hip Position",
         "butterfly_rhythm_break": "Butterfly Rhythm Review",
+        "backstroke_dropped_catch": "Backstroke Catch Needs Review",
+        "backstroke_short_extension": "Backstroke Entry Extension Looks Short",
+        "butterfly_body_line_loss": "Butterfly Body Line Review",
+        "butterfly_breath_timing": "Butterfly Breathing Timing",
     }.get(fault_tag, "Coach Review Finding")
 
 
