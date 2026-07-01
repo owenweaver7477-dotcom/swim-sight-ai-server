@@ -8,6 +8,7 @@ results rather than guessed cycles.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -320,14 +321,87 @@ _SUMMARY_SCALAR_KEYS = (
     "confidence",
 )
 
+# Strokes per full detected cycle, by stroke. Only the strokes the cycle
+# detector supports are mapped; anything else yields null rate fields.
+_STROKES_PER_CYCLE = {"freestyle": 2, "breaststroke": 1}
+
+# Gates for emitting an estimated rate (documented in AI_WORKER_CONTRACT.md).
+_MIN_CYCLES_FOR_RATE = 3
+_MIN_REGULARITY_FOR_RATE = 0.6
+_MIN_CONFIDENCE_FOR_RATE = 0.4
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def estimate_stroke_rate(
+    *,
+    status: Any,
+    stroke_type: Any,
+    mean_cycle_duration_seconds: Any,
+    cycle_count: Any,
+    cycle_regularity: Any,
+    confidence: Any,
+) -> Dict[str, Any]:
+    """Estimate stroke rate from real cycle timing. Pure and side-effect free.
+
+    Uses only the cycle summary, which is derived from real frame timing
+    (frame indices / fps). Rate fields are null with a reason flag whenever any
+    gate fails. `_flags` is an internal list of reason codes for the caller to
+    fold into quality_flags. This is a 2D-heuristic ESTIMATE, never a measured
+    or public metric.
+
+      estimated_cycle_rate_per_min = 60 / mean_cycle_duration_seconds
+      estimated_stroke_rate_spm    = cycle_rate * strokes_per_cycle
+    """
+    stroke = _normalize_stroke(str(stroke_type or ""))
+    strokes_per_cycle = _STROKES_PER_CYCLE.get(stroke)
+
+    def _null(flags: Sequence[str]) -> Dict[str, Any]:
+        return {
+            "estimated_cycle_rate_per_min": None,
+            "estimated_stroke_rate_spm": None,
+            "strokes_per_cycle": strokes_per_cycle,
+            "stroke_rate_estimated": True,
+            "_flags": list(dict.fromkeys(flags)),
+        }
+
+    if status != "completed" or strokes_per_cycle is None:
+        return _null(["stroke_rate_unavailable"])
+
+    flags: List[str] = []
+    duration = mean_cycle_duration_seconds
+    if not (_is_number(duration) and math.isfinite(float(duration)) and float(duration) > 0):
+        flags.append("stroke_rate_invalid_cycle_duration")
+    if not (_is_number(cycle_count) and int(cycle_count) >= _MIN_CYCLES_FOR_RATE):
+        flags.append("stroke_rate_insufficient_cycles")
+    if not (_is_number(cycle_regularity) and float(cycle_regularity) >= _MIN_REGULARITY_FOR_RATE):
+        flags.append("stroke_rate_low_regularity")
+    if not (_is_number(confidence) and float(confidence) >= _MIN_CONFIDENCE_FOR_RATE):
+        flags.append("stroke_rate_low_confidence")
+
+    if flags:
+        return _null(flags)
+
+    cycle_rate = round(60.0 / float(duration), 1)
+    stroke_rate = round(cycle_rate * strokes_per_cycle, 1)
+    return {
+        "estimated_cycle_rate_per_min": cycle_rate,
+        "estimated_stroke_rate_spm": stroke_rate,
+        "strokes_per_cycle": strokes_per_cycle,
+        "stroke_rate_estimated": True,
+        "_flags": [],
+    }
+
 
 def sanitized_cycle_summary(result: Mapping[str, Any]) -> Dict[str, Any]:
     """Whitelist-only summary of an analyze_stroke_cycles result.
 
     Returns a flat dict safe for internal telemetry. It NEVER contains raw
     landmarks, per-frame cycle boundaries, signed URLs, secrets, or private
-    video keys -- only the scalar summary, a status, and safe quality flags.
-    This is a 2D heuristic signal, explicitly marked not public.
+    video keys -- only the scalar summary, a status, safe quality flags, and an
+    internal 2D-heuristic stroke-rate ESTIMATE. Explicitly marked not public.
     """
     summary = result.get("summary") if isinstance(result, Mapping) else None
     summary = summary if isinstance(summary, Mapping) else {}
@@ -344,4 +418,17 @@ def sanitized_cycle_summary(result: Mapping[str, Any]) -> Dict[str, Any]:
     }
     for key in _SUMMARY_SCALAR_KEYS:
         sanitized[key] = summary.get(key)
+
+    rate = estimate_stroke_rate(
+        status=sanitized["status"],
+        stroke_type=result.get("stroke_type") if isinstance(result, Mapping) else None,
+        mean_cycle_duration_seconds=summary.get("mean_cycle_duration_seconds"),
+        cycle_count=summary.get("cycle_count"),
+        cycle_regularity=summary.get("cycle_regularity"),
+        confidence=summary.get("confidence"),
+    )
+    rate_flags = rate.pop("_flags", [])
+    sanitized.update(rate)
+    if rate_flags:
+        sanitized["quality_flags"] = list(dict.fromkeys([*sanitized["quality_flags"], *rate_flags]))
     return sanitized

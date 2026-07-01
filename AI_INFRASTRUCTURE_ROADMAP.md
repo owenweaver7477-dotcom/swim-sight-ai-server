@@ -66,6 +66,12 @@ that every optional flag is enabled.
   (cycle count, mean duration, regularity, confidence, quality flags) to the
   internal `processing_telemetry` only. It is `public_safe: false`, is not a
   biomechanical metric, and must stay internal until coach-validated.
+- An internal estimated stroke rate (`estimated_cycle_rate_per_min`,
+  `estimated_stroke_rate_spm`) is derived from that 2D-heuristic cycle timing
+  when `PHASE_ANALYSIS=true` and confidence/regularity/cycle-count gates pass. It
+  is an ESTIMATE, not a measurement, and is not velocity, split time, distance
+  per stroke, or race prediction. It stays internal (`public_safe: false`) and
+  must not appear in shared reports until validated and coach-approved.
 - Estimated drag remains an internal prototype and is inactive because
   `ENABLE_ESTIMATED_DRAG=false`.
 

@@ -240,8 +240,32 @@ off**.
 - It never contains raw landmarks, per-frame cycle boundaries, phase frame
   ranges, signed URLs, private paths, or secrets.
 
-This is **not** a public metric, **not** true biomechanical scoring, **not** 3D,
-and **not** velocity/stroke-rate/split/distance-per-stroke output. It is derived
+### Estimated stroke rate (internal, experimental)
+
+The same `stroke_cycles` object also carries an internal, experimental
+stroke-rate ESTIMATE derived only from the cycle timing above:
+
+- `estimated_cycle_rate_per_min` = `60 / mean_cycle_duration_seconds`.
+- `estimated_stroke_rate_spm` = `estimated_cycle_rate_per_min * strokes_per_cycle`.
+- `strokes_per_cycle` = `2` for freestyle, `1` for breaststroke (the strokes the
+  cycle detector supports); `null` for any other/unknown stroke.
+- `stroke_rate_estimated` is always `true` (it is an estimate, never measured).
+
+Rate values (`estimated_cycle_rate_per_min`, `estimated_stroke_rate_spm`) are
+`null`, with a reason added to `quality_flags`, unless **all** gates pass:
+`status == "completed"`, `cycle_count >= 3`, `cycle_regularity >= 0.6`,
+`confidence >= 0.4`, and `mean_cycle_duration_seconds` finite and `> 0`. Reason
+flags: `stroke_rate_unavailable`, `stroke_rate_insufficient_cycles`,
+`stroke_rate_low_regularity`, `stroke_rate_low_confidence`,
+`stroke_rate_invalid_cycle_duration`.
+
+The estimated stroke rate is **internal experimental telemetry**, derived from
+2D-heuristic cycle timing. It is **not** a public biomechanical metric, and it is
+**not** velocity, split time, distance per stroke, or race prediction. It must
+**not** be used in shared reports until validated and coach-approved.
+
+This whole block is **not** a public metric, **not** true biomechanical scoring,
+**not** 3D, and **not** velocity/split/distance-per-stroke output. It is derived
 from relative 2D image-space periodicity for internal coach-review evidence only
 and must not be surfaced in Coach Studio or shared reports until separately
 validated. No new top-level callback field is added.
