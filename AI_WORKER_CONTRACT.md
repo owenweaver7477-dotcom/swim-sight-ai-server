@@ -424,6 +424,57 @@ The current app may expose an Elite Lab preview, but it is not a real analysis-f
 
 Future `SwimmerSkeleton3D` work should wait until there is reliable labelled pose data, a model contract, and a clear product scope. Do not claim live reference matching, measured movement truth, or production 3D analysis until the underlying pipeline exists.
 
+## Verified Success Callback Shape
+
+This section records the **actual** structure the worker emits on a real-pose
+success (`analysis_mode: "real_pose"`), as produced by
+`app.swim_analyzer.analyze_pose_data` plus the envelope assembled in
+`main._run_analysis_pipeline`. It is verified by `scripts/test_callback_shape.py`,
+which runs the real analysis path on synthetic pose data and asserts
+`fixtures/callback_success.example.json` matches. Treat this shape as
+additive-only: do not remove or rename existing fields.
+
+Each entry in `findings[]` currently includes these keys:
+
+```text
+id, source, stroke, phase, stroke_phase, fault_tag, severity, confidence,
+confidence_score, ai_confidence, timestamp_seconds, timestamp_start,
+timestamp_end, frame_index, finding_title, finding_description, observation,
+why_it_matters, correction_cue, recommended_correction, cue, drill,
+recommended_drill, next_focus, evidence, evidence_type, measurement_summary,
+quality_flags, coach_review_required, frame_reference
+```
+
+- `severity` is a capitalised label (`"High"` / `"Medium"`).
+- `confidence` is a string label (`"high"` / `"medium"`); the numeric value is
+  `confidence_score` (also mirrored as `ai_confidence`). Draft findings are
+  emitted around a 0.62–0.88 confidence band and every finding sets
+  `coach_review_required: true`.
+- `evidence` is an object with:
+  `timestamp_seconds, frame_index, phase, keypoints_used, confidence,
+  confidence_score, evidence_note`.
+- These are **heuristic, relative-2D pose observations**, not objective
+  biomechanics. There are no calibrated angles, velocities, distances, stroke
+  rates, or 3D measurements in the payload.
+
+`phase_breakdown` is an object keyed by the stroke's phase names. Each value is
+either:
+
+- not flagged — `{ "status": "not_flagged", "label", "coach_note" }`, or
+- flagged — `{ "status": "review_required", "label", "severity", "fault_tag",
+  "coach_note" }`.
+
+`key_frames[]` entries are `{ "timestamp", "label", "description" }`.
+
+`temporal_metrics.metric_basis` is always `"relative_2d_image_space"` and its
+values must not be presented as calibrated 3D angles, distances, velocities, or
+hydrodynamic measurements.
+
+When a request selects structured report outputs (non-legacy), the callback also
+carries `requested_outputs`, `completed_outputs`, `skipped_outputs`, and
+`estimate_only_outputs` (see "Structured report-output selection"). Legacy
+requests (no `selected_report_outputs`) omit these, as the example fixture does.
+
 ## Fixtures
 
 Safe example payloads live in `fixtures/`:

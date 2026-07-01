@@ -30,7 +30,7 @@ app: coach uploads video & triggers analysis
   → app shows AI-suggested findings → coach review & approval
 ```
 
-Already-built foundations to preserve (inspect before rewriting): storage access adapter, signed-URL fallback, provider/key payload handling, callback summary handling, early 2D/3D pose foundations, log-redaction foundations, storage/callback-safety test foundations.
+Already-built foundations to preserve (inspect before rewriting): signed-URL video download (the worker consumes signed URLs; it has no Supabase storage adapter), signed-URL fallback, provider/key payload handling, callback summary handling, early 2D pose foundations (no real 3D lifter yet), log-redaction foundations, storage/callback-safety test foundations.
 
 ## 3. The Worker Pipeline
 
@@ -51,7 +51,7 @@ Load-bearing. Inspect and preserve; do not weaken:
 
 1. **Job intake / request validation** — only legitimate app jobs are processed.
 2. **Private video access** — signed-URL + provider/key handling + signed-URL fallback (Section 5).
-3. **Storage adapter** — how the worker reaches Supabase Storage; failure handling.
+3. **Signed-URL video access** — the worker consumes a short-lived signed URL supplied in the job to download the private video over HTTPS. There is **no** Supabase SDK or storage adapter in the worker; it does not talk to Supabase Storage directly. Preserve the download safety limits and the signed-URL fallback.
 4. **Video probing & frame extraction** — safe handling of bad/large/unsupported input.
 5. **Pose-analysis foundations** — existing 2D/3D logic.
 6. **Callback generation, delivery & validation** — the secured handshake back to the app (Section 7).

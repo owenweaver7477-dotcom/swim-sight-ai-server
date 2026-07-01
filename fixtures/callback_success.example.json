@@ -4,79 +4,250 @@
   "video_upload_id": "22222222-2222-4222-8222-222222222222",
   "engine": "pose-mvp-0.5",
   "status": "completed",
+  "ai_engine_version": "pose-mvp-0.5",
+  "model_name": "mediapipe_pose",
   "analysis_mode": "real_pose",
   "real_pose_detected": true,
   "overall_score": 78,
+  "technical_summary": "Pose-assisted freestyle analysis processed 54 sampled frames and detected usable body landmarks in 40 frames (74% detection rate). Draft findings flagged for coach review: Body Line Needs Coach Review. These are evidence prompts, not automatic conclusions.",
+  "error_message": null,
+  "processed_video_url": "",
+  "pose_data_file_url": "",
   "phase_breakdown": {
-    "kick_setup": {
-      "score": 72,
-      "finding_count": 1
+    "entry_extension": {
+      "status": "not_flagged",
+      "label": "Entry Extension",
+      "coach_note": "No medium or high-confidence draft finding from sampled pose."
     },
-    "line_reset": {
-      "score": 80,
-      "finding_count": 1
+    "catch_setup": {
+      "status": "not_flagged",
+      "label": "Catch Setup",
+      "coach_note": "No medium or high-confidence draft finding from sampled pose."
+    },
+    "pull": {
+      "status": "not_flagged",
+      "label": "Pull",
+      "coach_note": "No medium or high-confidence draft finding from sampled pose."
+    },
+    "breathing": {
+      "status": "not_flagged",
+      "label": "Breathing",
+      "coach_note": "No medium or high-confidence draft finding from sampled pose."
+    },
+    "recovery": {
+      "status": "not_flagged",
+      "label": "Recovery",
+      "coach_note": "No medium or high-confidence draft finding from sampled pose."
+    },
+    "body_line": {
+      "status": "review_required",
+      "label": "Body Line",
+      "severity": "High",
+      "fault_tag": "body_line_loss",
+      "coach_note": "The hips appear to drop below the shoulder line through the sampled stroke."
     }
   },
   "findings": [
     {
-      "finding_title": "Knees widen during kick setup",
-      "stroke_phase": "kick_setup",
-      "fault_tag": "wide_knees",
-      "severity": "medium",
-      "confidence": 0.76,
+      "id": "body_line_loss-102",
+      "source": "ai_pose",
+      "stroke": "Freestyle",
+      "phase": "body_line",
+      "stroke_phase": "body_line",
+      "fault_tag": "body_line_loss",
+      "severity": "High",
+      "confidence": "high",
+      "confidence_score": 0.87,
+      "ai_confidence": 0.87,
       "timestamp_seconds": 3.42,
-      "observation": "Pose evidence suggests the kick setup widens before the drive phase.",
-      "impact": "A wider setup can make it harder to hold a narrow line into the glide.",
-      "coach_cue": "Heels up, late turn, then drive straight back.",
-      "recommended_drill": "Wall breaststroke kick with narrow knees",
-      "quality_flags": []
+      "timestamp_start": 3.02,
+      "timestamp_end": 3.82,
+      "frame_index": 102,
+      "finding_title": "Body Line Needs Coach Review",
+      "finding_description": "The hips appear to drop below the shoulder line through the sampled stroke.",
+      "observation": "The hips appear to drop below the shoulder line through the sampled stroke.",
+      "why_it_matters": "A lower hip line can increase resistance and make the catch less effective.",
+      "correction_cue": "Hold a long line from head through hips before adding speed.",
+      "recommended_correction": "Hold a long line from head through hips before adding speed.",
+      "cue": "Hold a long line from head through hips before adding speed.",
+      "drill": "Side-line kick or streamline kick with quiet head",
+      "recommended_drill": "Side-line kick or streamline kick with quiet head",
+      "next_focus": "Body line before propulsion",
+      "evidence": {
+        "timestamp_seconds": 3.42,
+        "frame_index": 102,
+        "phase": "body_line",
+        "keypoints_used": [
+          "left_shoulder",
+          "right_shoulder",
+          "left_hip",
+          "right_hip"
+        ],
+        "confidence": "high",
+        "confidence_score": 0.87,
+        "evidence_note": "Peak shoulder-to-hip vertical offset was 1.90 across 40 usable pose frames."
+      },
+      "evidence_type": "pose_measurement",
+      "measurement_summary": "Peak shoulder-to-hip vertical offset was 1.90 across 40 usable pose frames.",
+      "quality_flags": [],
+      "coach_review_required": true,
+      "frame_reference": ""
     }
   ],
-  "drag_analysis": [],
   "key_frames": [
     {
-      "timestamp_seconds": 3.42,
-      "frame_label": "Kick setup",
-      "stroke_phase": "kick_setup"
+      "timestamp": 0.5,
+      "label": "Entry Extension",
+      "description": "Coach reference frame for freestyle entry_extension; 12 visible keypoints."
+    },
+    {
+      "timestamp": 2.0,
+      "label": "Catch Setup",
+      "description": "Coach reference frame for freestyle catch_setup; 12 visible keypoints."
+    },
+    {
+      "timestamp": 3.4,
+      "label": "Pull",
+      "description": "Coach reference frame for freestyle pull; 12 visible keypoints."
+    },
+    {
+      "timestamp": 5.0,
+      "label": "Breathing",
+      "description": "Coach reference frame for freestyle breathing; 12 visible keypoints."
+    },
+    {
+      "timestamp": 6.6,
+      "label": "Recovery",
+      "description": "Coach reference frame for freestyle recovery; 12 visible keypoints."
+    },
+    {
+      "timestamp": 8.2,
+      "label": "Body Line",
+      "description": "Coach reference frame for freestyle body_line; 12 visible keypoints."
     }
   ],
-  "technical_summary": "Pose-assisted draft findings are ready for coach review.",
-  "error_message": null,
+  "temporal_metrics": {
+    "metric_basis": "relative_2d_image_space",
+    "sample_count": 40,
+    "usable_sample_count": 40,
+    "phase_counts": {
+      "entry_extension": 8,
+      "catch_setup": 9,
+      "pull": 11,
+      "recovery": 7,
+      "body_line": 5
+    },
+    "phase_segments": [
+      {
+        "phase": "entry_extension",
+        "start_seconds": 0.0,
+        "end_seconds": 1.3,
+        "sample_count": 8
+      },
+      {
+        "phase": "catch_setup",
+        "start_seconds": 1.3,
+        "end_seconds": 2.8,
+        "sample_count": 9
+      },
+      {
+        "phase": "pull",
+        "start_seconds": 2.8,
+        "end_seconds": 4.6,
+        "sample_count": 11
+      },
+      {
+        "phase": "recovery",
+        "start_seconds": 4.6,
+        "end_seconds": 5.8,
+        "sample_count": 7
+      },
+      {
+        "phase": "body_line",
+        "start_seconds": 5.8,
+        "end_seconds": 6.5,
+        "sample_count": 5
+      }
+    ],
+    "relative_metrics": {
+      "body_line_offset": {
+        "count": 40,
+        "median": 1.62,
+        "p10": 1.44,
+        "p90": 1.9,
+        "min": 1.38,
+        "max": 1.95
+      },
+      "shoulder_tilt": {
+        "count": 40,
+        "median": 0.09,
+        "p10": 0.03,
+        "p90": 0.18,
+        "min": 0.01,
+        "max": 0.24
+      },
+      "hip_tilt": {
+        "count": 40,
+        "median": 0.07,
+        "p10": 0.02,
+        "p90": 0.15,
+        "min": 0.0,
+        "max": 0.21
+      }
+    },
+    "quality_flags": []
+  },
   "stage_history": [
     {
       "stage": "downloading_video",
       "status": "running",
-      "progress_percent": 12,
-      "message": "Downloading private video for temporary analysis"
+      "progress_percent": 10,
+      "message": "Downloading video securely from private storage",
+      "timestamp": "2026-06-23T00:00:00Z"
     },
     {
       "stage": "processing_tier_selected",
       "status": "running",
-      "progress_percent": 28,
-      "message": "Selected standard_ai processing tier"
+      "progress_percent": 30,
+      "message": "Selected standard_ai processing tier",
+      "timestamp": "2026-06-23T00:00:01Z"
     },
     {
       "stage": "completed",
       "status": "completed",
       "progress_percent": 100,
-      "message": "Pose-assisted analysis completed"
+      "message": "AI review ready for coach approval",
+      "timestamp": "2026-06-23T00:00:18Z"
     }
   ],
   "processing_duration_seconds": 18.4,
   "video_duration_seconds": 9.8,
   "video_fps": 30.0,
-  "detection_ratio": 0.74,
+  "detection_ratio": 0.741,
   "pose_reliability": "reliable",
   "quality_flags": [],
   "recommended_next_action": "real_pose_review_ready",
   "frame_count_processed": 54,
   "detected_pose_frames": 40,
-  "detected_keypoints_count": 12.2,
+  "detected_keypoints_count": 12.0,
   "processing_tier": "standard_ai",
   "source_width": 1920,
   "source_height": 1080,
   "processed_width": 640,
   "processed_height": 360,
   "processing_window_seconds": 9.8,
-  "sampled_frame_count": 54
+  "sampled_frame_count": 54,
+  "processing_telemetry": {
+    "frames_requested": 54,
+    "frames_sampled": 54,
+    "frames_with_pose": 40,
+    "pose_frame_failures": 0,
+    "pose_detection_rate": 0.7407,
+    "average_core_keypoints": 12.0,
+    "average_visible_landmarks": 15.0,
+    "fallback_triggered": false,
+    "processing_tier": "standard_ai",
+    "failed_frame_reads": 0,
+    "quality_flags": []
+  }
 }

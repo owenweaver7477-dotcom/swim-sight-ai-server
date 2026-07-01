@@ -62,6 +62,31 @@ JOB_REQUIRED = {
     "message",
 }
 
+# Success-callback sub-shape guard. These mirror the real worker output
+# (app.swim_analyzer._make_finding / _build_phase_breakdown /
+# _generate_structural_keyframes). The authoritative, code-derived check lives in
+# scripts/test_callback_shape.py; the checks below are a fast, dependency-free
+# guard so historical fixture drift cannot silently reappear.
+SUCCESS_FINDING_REQUIRED = {
+    "fault_tag",
+    "severity",
+    "confidence",
+    "confidence_score",
+    "observation",
+    "why_it_matters",
+    "phase",
+    "stroke_phase",
+    "timestamp_seconds",
+    "correction_cue",
+    "cue",
+    "finding_title",
+    "coach_review_required",
+    "evidence",
+}
+SUCCESS_FINDING_FORBIDDEN = {"impact", "coach_cue"}
+SUCCESS_PHASE_FORBIDDEN = {"score", "finding_count"}
+SUCCESS_KEYFRAME_FORBIDDEN = {"frame_label"}
+
 UNSAFE_PATTERNS = [
     re.compile(r"token=", re.IGNORECASE),
     re.compile(r"access_token", re.IGNORECASE),
@@ -132,6 +157,43 @@ def validate_callback(name: str, payload: dict) -> None:
             raise AssertionError(f"{name} manual-review payload must recommend manual review")
 
 
+def validate_success_shape(name: str, payload: dict) -> None:
+    """Guard the real-pose success callback sub-shape against fixture drift."""
+    if payload.get("analysis_mode") != "real_pose":
+        return
+
+    findings = payload.get("findings") or []
+    if not findings:
+        raise AssertionError(f"{name} real-pose success fixture must include at least one finding")
+
+    for index, finding in enumerate(findings):
+        keys = set(finding)
+        missing = sorted(SUCCESS_FINDING_REQUIRED - keys)
+        if missing:
+            raise AssertionError(f"{name} finding[{index}] missing required keys: {', '.join(missing)}")
+        drifted = sorted(keys & SUCCESS_FINDING_FORBIDDEN)
+        if drifted:
+            raise AssertionError(f"{name} finding[{index}] contains drifted keys: {', '.join(drifted)}")
+        if not isinstance(finding.get("evidence"), dict):
+            raise AssertionError(f"{name} finding[{index}] evidence must be an object")
+
+    for phase, entry in (payload.get("phase_breakdown") or {}).items():
+        keys = set(entry)
+        if not {"status", "label"}.issubset(keys):
+            raise AssertionError(f"{name} phase_breakdown[{phase}] must include status and label")
+        drifted = sorted(keys & SUCCESS_PHASE_FORBIDDEN)
+        if drifted:
+            raise AssertionError(f"{name} phase_breakdown[{phase}] contains drifted keys: {', '.join(drifted)}")
+
+    for index, frame in enumerate(payload.get("key_frames") or []):
+        keys = set(frame)
+        if not {"timestamp", "label"}.issubset(keys):
+            raise AssertionError(f"{name} key_frames[{index}] must include timestamp and label")
+        drifted = sorted(keys & SUCCESS_KEYFRAME_FORBIDDEN)
+        if drifted:
+            raise AssertionError(f"{name} key_frames[{index}] contains drifted keys: {', '.join(drifted)}")
+
+
 def validate_job_status(payload: dict) -> None:
     assert_required("job_status", payload, JOB_REQUIRED)
     progress = payload.get("progress_percent")
@@ -155,6 +217,8 @@ def main() -> int:
             validate_accepted(payload)
         elif name.startswith("callback_"):
             validate_callback(name, payload)
+            if name == "callback_success.example.json":
+                validate_success_shape(name, payload)
         elif name == "job_status.example.json":
             validate_job_status(payload)
 
