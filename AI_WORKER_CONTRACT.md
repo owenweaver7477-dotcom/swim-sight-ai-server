@@ -224,6 +224,28 @@ Only the callback host and a short outcome code are logged — never the full
 callback URL (which may carry query parameters), `signed_video_url`, or secrets.
 This does not change the callback payload shape.
 
+## Experimental Stroke-Cycle Telemetry (PHASE_ANALYSIS, default off)
+
+An optional 2D-heuristic stroke-cycle summary can be attached to the existing
+`processing_telemetry` object. It is **experimental, internal-only, and default
+off**.
+
+- Env flag: `PHASE_ANALYSIS` (default `false`). When unset/false the callback is
+  unchanged and this summary is absent.
+- When `true`, `processing_telemetry.stroke_cycles` is added with a sanitized,
+  whitelist-only summary:
+  - `enabled` (`true`), `status`, `cycle_count`, `mean_cycle_duration_seconds`,
+    `cycle_regularity`, `confidence`, `quality_flags`, `basis` (`"2d_heuristic"`),
+    `public_safe` (`false`).
+- It never contains raw landmarks, per-frame cycle boundaries, phase frame
+  ranges, signed URLs, private paths, or secrets.
+
+This is **not** a public metric, **not** true biomechanical scoring, **not** 3D,
+and **not** velocity/stroke-rate/split/distance-per-stroke output. It is derived
+from relative 2D image-space periodicity for internal coach-review evidence only
+and must not be surfaced in Coach Studio or shared reports until separately
+validated. No new top-level callback field is added.
+
 ## Adaptive Processing Tiers
 
 The worker inspects video metadata before heavy processing and selects one of:

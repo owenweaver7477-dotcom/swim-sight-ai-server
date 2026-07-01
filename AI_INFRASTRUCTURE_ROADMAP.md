@@ -61,6 +61,11 @@ that every optional flag is enabled.
 - Sequential frame reading is deployed but inactive because
   `SEQUENTIAL_FRAME_READ=false`.
 - Higher MediaPipe complexity is inactive because `POSE_MODEL_COMPLEXITY=0`.
+- Heuristic stroke-cycle segmentation telemetry is deployed but inactive because
+  `PHASE_ANALYSIS=false`. When enabled it adds a sanitized 2D-heuristic summary
+  (cycle count, mean duration, regularity, confidence, quality flags) to the
+  internal `processing_telemetry` only. It is `public_safe: false`, is not a
+  biomechanical metric, and must stay internal until coach-validated.
 - Estimated drag remains an internal prototype and is inactive because
   `ENABLE_ESTIMATED_DRAG=false`.
 

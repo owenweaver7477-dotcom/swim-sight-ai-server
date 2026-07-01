@@ -31,6 +31,11 @@ from app.worker_auth import (
     verify_inbound_secret,
 )
 from app.callback_safety import callback_host_mode, is_callback_allowed
+from app.stroke_cycles import (
+    analyze_stroke_cycles,
+    phase_analysis_enabled,
+    sanitized_cycle_summary,
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -359,6 +364,35 @@ def _guard_callback_host(callback_url: str, job_id: str) -> bool:
         reason,
     )
     return True
+
+
+def _stroke_cycle_telemetry(
+    pose_results: List[Dict[str, Any]],
+    fps: float,
+    stroke_type: Optional[str],
+) -> Dict[str, Any]:
+    """Internal, experimental 2D-heuristic stroke-cycle summary for telemetry.
+
+    Default-off (PHASE_ANALYSIS). Returns a whitelisted summary only -- never
+    landmarks, per-frame data, URLs, or secrets. Never raises: on failure it
+    returns a safe error status so the analysis job is unaffected.
+    """
+    try:
+        result = analyze_stroke_cycles(pose_results, fps, stroke_type or "")
+        return sanitized_cycle_summary(result)
+    except Exception as error:
+        logger.warning("Stroke-cycle telemetry skipped: %s", type(error).__name__)
+        return {
+            "enabled": True,
+            "status": "error",
+            "quality_flags": ["stroke_cycle_analysis_failed"],
+            "basis": "2d_heuristic",
+            "public_safe": False,
+            "cycle_count": None,
+            "mean_cycle_duration_seconds": None,
+            "cycle_regularity": None,
+            "confidence": None,
+        }
 
 
 @app.post("/jobs/{job_id}/cancel", status_code=status.HTTP_200_OK)
@@ -893,6 +927,14 @@ async def _run_analysis_pipeline(
             "failed_frame_reads": video_metadata.get("failed_frame_reads", 0),
             "quality_flags": quality_flags,
         }
+
+        # Experimental, internal-only 2D-heuristic stroke-cycle summary. Default
+        # OFF (PHASE_ANALYSIS). Additive under processing_telemetry; sanitized
+        # (no landmarks/per-frame data/URLs/secrets); never a public metric.
+        if phase_analysis_enabled():
+            processing_telemetry["stroke_cycles"] = _stroke_cycle_telemetry(
+                pose_results, fps, request.stroke_type
+            )
 
         analysis_payload.update({
             "job_id": job_id,

@@ -308,3 +308,40 @@ def analyze_stroke_cycles(
             "interpolated_ratio": round(interpolated_ratio, 3),
         },
     }
+
+
+# Keys that are safe to surface in internal telemetry. Everything else from
+# analyze_stroke_cycles (per-frame cycle boundaries, phase frame ranges, raw
+# signal diagnostics) is intentionally dropped.
+_SUMMARY_SCALAR_KEYS = (
+    "cycle_count",
+    "mean_cycle_duration_seconds",
+    "cycle_regularity",
+    "confidence",
+)
+
+
+def sanitized_cycle_summary(result: Mapping[str, Any]) -> Dict[str, Any]:
+    """Whitelist-only summary of an analyze_stroke_cycles result.
+
+    Returns a flat dict safe for internal telemetry. It NEVER contains raw
+    landmarks, per-frame cycle boundaries, signed URLs, secrets, or private
+    video keys -- only the scalar summary, a status, and safe quality flags.
+    This is a 2D heuristic signal, explicitly marked not public.
+    """
+    summary = result.get("summary") if isinstance(result, Mapping) else None
+    summary = summary if isinstance(summary, Mapping) else {}
+
+    sanitized: Dict[str, Any] = {
+        "enabled": True,
+        "status": str(result.get("status", "unknown")) if isinstance(result, Mapping) else "unknown",
+        "quality_flags": [
+            str(flag)
+            for flag in (result.get("quality_flags") or [] if isinstance(result, Mapping) else [])
+        ],
+        "basis": "2d_heuristic",
+        "public_safe": False,
+    }
+    for key in _SUMMARY_SCALAR_KEYS:
+        sanitized[key] = summary.get(key)
+    return sanitized
