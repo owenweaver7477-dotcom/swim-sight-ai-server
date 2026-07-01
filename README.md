@@ -163,6 +163,24 @@ Optional. Maximum worker processing time in seconds. Defaults to `600` (10
 minutes), with accepted values from 30 to 3600 seconds. Timed-out jobs return a
 safe manual-review callback with zero findings.
 
+### `AI_MAX_CONCURRENT_JOBS`
+
+Optional. Caps how many heavy analysis jobs run at once so a small Render
+instance is not overwhelmed. **Unset, `0`, or an invalid value means disabled
+(no cap — current behaviour).** A positive integer (recommended start: `2`) is
+the maximum number of concurrent heavy pipelines. `/process-video` still returns
+`202` immediately; over-cap jobs wait for a slot (shown as `queued` /
+`waiting_for_worker_slot` in the worker job status). The callback payload is
+unchanged.
+
+### `AI_POST_TIMEOUT_DRAIN_SECONDS`
+
+Optional. When a job times out, Python cannot kill the running worker thread.
+This bounds how long the timed-out job keeps holding its concurrency slot while
+that thread drains, so a runaway thread cannot be multiplied by new jobs.
+Defaults to `0` (release immediately — current timing); clamped to a safe
+ceiling. Only relevant when `AI_MAX_CONCURRENT_JOBS` is set.
+
 Recommended Render service settings:
 
 - Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`

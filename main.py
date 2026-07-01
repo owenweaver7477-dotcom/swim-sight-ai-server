@@ -19,6 +19,8 @@ from app.job_reliability import (
     build_failure_callback,
     failure_payload_is_safe,
     job_timeout_seconds,
+    payload_is_safe,
+    unsafe_keys_in,
 )
 from app.report_outputs import (
     attach_report_output_metadata,
@@ -36,6 +38,7 @@ from app.stroke_cycles import (
     phase_analysis_enabled,
     sanitized_cycle_summary,
 )
+from app.concurrency import max_concurrent_jobs, post_timeout_drain_seconds
 
 
 # ─────────────────────────────────────────────────────────────
@@ -286,6 +289,58 @@ async def run_blocking(job_id: str, function: Callable[..., T], *args, **kwargs)
     return result
 
 
+# ─────────────────────────────────────────────────────────────
+# Concurrency cap (AI_MAX_CONCURRENT_JOBS). Default OFF (no cap).
+# ─────────────────────────────────────────────────────────────
+
+_JOB_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_JOB_SEMAPHORE_CAP: int = 0
+
+
+def _get_job_semaphore() -> Optional[asyncio.Semaphore]:
+    """Lazily return a bounded semaphore matching AI_MAX_CONCURRENT_JOBS.
+
+    Returns None when the cap is disabled (unset/0/invalid) so no limiting is
+    applied and behaviour is exactly as before. Created on the running loop.
+    """
+    global _JOB_SEMAPHORE, _JOB_SEMAPHORE_CAP
+    cap = max_concurrent_jobs()
+    if cap <= 0:
+        return None
+    if _JOB_SEMAPHORE is None or _JOB_SEMAPHORE_CAP != cap:
+        _JOB_SEMAPHORE = asyncio.Semaphore(cap)
+        _JOB_SEMAPHORE_CAP = cap
+    return _JOB_SEMAPHORE
+
+
+async def _drain_blocking_task(job_id: str) -> None:
+    """Bounded wait for a job's in-flight blocking thread to finish.
+
+    Python cannot kill a running worker thread. Holding the concurrency slot until
+    the thread drains stops a timed-out runaway thread from being multiplied by
+    newly started jobs. Default drain is 0s => returns immediately (current
+    timing). After the drain window the slot is released and any still-running
+    thread is logged as an orphan (no secrets/URLs are logged).
+    """
+    drain_seconds = post_timeout_drain_seconds()
+    if drain_seconds <= 0:
+        return
+    task = ACTIVE_BLOCKING_TASKS.get(job_id)
+    if task is None or task.done():
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=drain_seconds)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[job=%s] Blocking thread still running after %ss drain; releasing slot "
+            "(orphan thread may continue until it returns)",
+            job_id,
+            drain_seconds,
+        )
+    except Exception as error:
+        logger.warning("[job=%s] Drain wait ended: %s", job_id, type(error).__name__)
+
+
 def _worker_secret_valid(value: Optional[str]) -> bool:
     expected = os.getenv("AI_WEBHOOK_SECRET", "")
     return bool(expected and value and hmac.compare_digest(expected, value))
@@ -507,34 +562,61 @@ async def run_analysis_pipeline(
 ):
     started_at = time.time()
     stage_history: List[Dict[str, Any]] = []
+
+    # Concurrency cap: acquire a heavy-job slot here (both the background-task and
+    # durable-queue paths call this function), NOT in /process-video, which must
+    # return 202 quickly. When the cap is disabled (default) semaphore is None and
+    # behaviour is unchanged. Over-cap jobs wait here (shown as queued) with the
+    # 202 already returned to the caller.
+    semaphore = _get_job_semaphore()
+    if semaphore is not None:
+        if semaphore.locked():
+            update_job(
+                job_id=job_id,
+                status_value="queued",
+                stage="waiting_for_worker_slot",
+                progress_percent=int(JOBS.get(job_id, {}).get("progress_percent") or 0),
+                message="Waiting for a worker processing slot",
+            )
+        await semaphore.acquire()
+
     try:
-        await asyncio.wait_for(
-            _run_analysis_pipeline(request, job_id, started_at, stage_history),
-            timeout=AI_JOB_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "[job=%s] AI job exceeded timeout_seconds=%s",
-            job_id,
-            AI_JOB_TIMEOUT_SECONDS,
-        )
-        await send_failure_result(
-            request=request,
-            job_id=job_id,
-            stage_history=stage_history,
-            started_at=started_at,
-            status_value="timed_out",
-            reason_code="worker_timeout",
-        )
-    except JobCancelledError:
-        await send_failure_result(
-            request=request,
-            job_id=job_id,
-            stage_history=stage_history,
-            started_at=started_at,
-            status_value="cancelled",
-            reason_code="cancelled_by_user",
-        )
+        try:
+            await asyncio.wait_for(
+                _run_analysis_pipeline(request, job_id, started_at, stage_history),
+                timeout=AI_JOB_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "[job=%s] AI job exceeded timeout_seconds=%s",
+                job_id,
+                AI_JOB_TIMEOUT_SECONDS,
+            )
+            # Hold the slot until the (unkillable) blocking thread drains, so a
+            # runaway thread cannot be multiplied by new jobs. No-op when the
+            # drain window is 0 (default) or the cap is disabled.
+            if semaphore is not None:
+                await _drain_blocking_task(job_id)
+            await send_failure_result(
+                request=request,
+                job_id=job_id,
+                stage_history=stage_history,
+                started_at=started_at,
+                status_value="timed_out",
+                reason_code="worker_timeout",
+            )
+        except JobCancelledError:
+            await send_failure_result(
+                request=request,
+                job_id=job_id,
+                stage_history=stage_history,
+                started_at=started_at,
+                status_value="cancelled",
+                reason_code="cancelled_by_user",
+            )
+    finally:
+        if semaphore is not None:
+            semaphore.release()
 
 
 async def _run_analysis_pipeline(
@@ -1032,6 +1114,24 @@ async def _run_analysis_pipeline(
 
         ensure_job_active(job_id)
         from app.callback_client import send_callback
+        # Final redaction net (should never trigger — the success payload is safe
+        # by construction). Fail closed: block the raw payload and send a safe
+        # failure callback instead. Log offending KEY NAMES only, never values.
+        if not payload_is_safe(analysis_payload):
+            logger.error(
+                "[job=%s] Unsafe success payload blocked before send: offending=%s",
+                job_id,
+                unsafe_keys_in(analysis_payload),
+            )
+            await send_failure_result(
+                request=request,
+                job_id=job_id,
+                stage_history=stage_history,
+                started_at=started_at,
+                status_value="failed",
+                reason_code="unknown_worker_failure",
+            )
+            return
         if _guard_callback_host(request.callback_url, job_id):
             callback_ok = await send_callback(request.callback_url, analysis_payload)
         else:
@@ -1289,6 +1389,23 @@ async def send_manual_review_result(
     payload = attach_report_output_metadata(payload, build_report_output_plan(request))
 
     from app.callback_client import send_callback
+    # Final redaction net for manual-review payloads. Fail closed to a safe
+    # failure callback if anything unsafe is ever present. Log key names only.
+    if not payload_is_safe(payload):
+        logger.error(
+            "[job=%s] Unsafe manual-review payload blocked before send: offending=%s",
+            job_id,
+            unsafe_keys_in(payload),
+        )
+        await send_failure_result(
+            request=request,
+            job_id=job_id,
+            stage_history=stage_history,
+            started_at=started_at,
+            status_value="failed",
+            reason_code="unknown_worker_failure",
+        )
+        return
     if _guard_callback_host(request.callback_url, job_id):
         callback_ok = await send_callback(request.callback_url, payload)
     else:

@@ -116,7 +116,14 @@ def build_failure_callback(
     }
 
 
-def failure_payload_is_safe(payload: Dict[str, Any]) -> bool:
+def payload_is_safe(payload: Dict[str, Any]) -> bool:
+    """True if the payload contains no unsafe keys or values.
+
+    Payload-agnostic: used as the final redaction net for success, manual-review,
+    and failure callbacks alike. Rejects unsafe keys (signed URLs, secrets,
+    private paths, raw landmarks/frames, athlete profile, stack traces) and unsafe
+    string values (URL tokens, /tmp//var//Users/ paths, supabase storage URLs).
+    """
     def walk(value: Any) -> bool:
         if isinstance(value, dict):
             for key, child in value.items():
@@ -132,3 +139,31 @@ def failure_payload_is_safe(payload: Dict[str, Any]) -> bool:
         return True
 
     return walk(payload)
+
+
+# Backwards-compatible alias: the failure path (and existing tests) call this name.
+failure_payload_is_safe = payload_is_safe
+
+
+def unsafe_keys_in(payload: Any) -> List[str]:
+    """Return offending KEY NAMES (plus a generic marker for value-pattern hits)
+    for safe logging. NEVER returns the offending values themselves, so this can
+    be logged without leaking signed URLs, secrets, or private paths.
+    """
+    found: List[str] = []
+
+    def walk(value: Any, key_hint: Optional[str] = None) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).lower() in UNSAFE_KEYS:
+                    found.append(str(key))
+                walk(child, str(key))
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, key_hint)
+        elif isinstance(value, str):
+            if UNSAFE_VALUE.search(value):
+                found.append(f"{key_hint or '?'}:<unsafe-value-pattern>")
+
+    walk(payload)
+    return sorted(set(found))

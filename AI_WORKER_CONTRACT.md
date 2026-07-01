@@ -134,6 +134,29 @@ safe reason code, coach message, `manual_review_available: true`, and zero
 findings. They never include signed URLs, frames, landmarks, stack traces,
 private paths, anthropometrics, or secrets.
 
+### Concurrency cap & post-timeout drain (optional, default off)
+
+- `AI_MAX_CONCURRENT_JOBS` caps concurrent heavy pipelines. Unset/`0`/invalid =
+  disabled (no cap, current behaviour). The slot is acquired inside the analysis
+  pipeline, not in `/process-video`, so the endpoint still returns `202`
+  immediately; over-cap jobs wait as `queued` (`waiting_for_worker_slot`). Both
+  the background-task and durable-queue paths share the same cap. The callback
+  shape is unchanged.
+- `AI_POST_TIMEOUT_DRAIN_SECONDS` (default `0`) bounds how long a timed-out job
+  holds its slot while its unkillable worker thread drains, so a runaway thread
+  cannot be multiplied by new jobs. Python cannot force-kill the thread; this
+  bounds the *number* of concurrent heavy threads rather than pretending to stop
+  one.
+
+### Callback payload safety net (all paths)
+
+`payload_is_safe(payload)` (a generalisation of `failure_payload_is_safe`) is
+applied before **success and manual-review** callbacks as well as failure
+callbacks. If an unsafe key or value is ever present, the raw payload is **not**
+sent — the worker fails closed to a safe failure callback and logs offending key
+names only (never the value, signed URL, or secret). Payloads are safe by
+construction, so this is a defensive net that should not trigger.
+
 ## Optional Durable Redis Queue
 
 The default execution path remains FastAPI background tasks. Set both:

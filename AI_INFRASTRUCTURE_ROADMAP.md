@@ -52,6 +52,11 @@ that every optional flag is enabled.
 
 - Redis Streams durability code is deployed but inactive because
   `ENABLE_DURABLE_QUEUE=false`.
+- A heavy-job concurrency cap is deployed but inactive because
+  `AI_MAX_CONCURRENT_JOBS` is unset (0 = no cap). Set it (recommended start `2`)
+  in a staging worker to bound memory under concurrent load;
+  `AI_POST_TIMEOUT_DRAIN_SECONDS` (default 0) bounds post-timeout thread
+  multiplication. Both preserve current behaviour when unset.
 - Persistent-signal finding filtering is deployed but inactive because
   `ROBUST_FINDINGS=false`.
 - CLAHE frame enhancement is deployed but inactive because
