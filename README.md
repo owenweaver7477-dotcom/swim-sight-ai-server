@@ -111,6 +111,48 @@ Recommended pilot capture:
 
 Required for callbacks. Must match the Vercel app value. Sent as `x-ai-webhook-secret`.
 
+This is the **outbound** worker → app secret only. It is **not** reused for
+inbound authentication (see `AI_INBOUND_SECRET`).
+
+### `AI_INBOUND_SECRET`
+
+Optional. The **inbound** app → worker job-submission secret, sent by the app as
+the `x-ai-inbound-secret` header on `POST /process-video`. Kept separate from
+`AI_WEBHOOK_SECRET` so the two rotate independently. Never logged.
+
+### `AI_INBOUND_AUTH_MODE`
+
+Optional. One of `off` (default), `monitor`, or `enforce`.
+
+- `off` — accept jobs without checking the header (current behaviour).
+- `monitor` — check the header and log a safe outcome (`ok`/`missing`/`invalid`),
+  but still accept the job.
+- `enforce` — reject a missing/invalid header with `401`. If `AI_INBOUND_SECRET`
+  is not set, enforce **fails closed** (rejects).
+
+Unset (or an unknown value) behaves as `off`, so setting neither var changes
+nothing. Roll out by deploying with `off`/`monitor`, having the app send the
+header, then flipping to `enforce`.
+
+### `AI_CALLBACK_ALLOWED_HOSTS`
+
+Optional. Comma-separated list of exact hostnames the worker is allowed to send
+the callback to (for example `swim-sight-3d-v1.vercel.app`). Matching requires
+`https` and an exact host (no suffix/wildcard).
+
+### `AI_CALLBACK_HOST_MODE`
+
+Optional. One of `monitor` (default) or `enforce`.
+
+- `monitor` — the callback still sends as today; the worker only logs whether the
+  host would be allowed or blocked.
+- `enforce` — a non-allowlisted `callback_url` is blocked **before** the callback
+  is sent, so the outbound webhook secret is never delivered to an unapproved
+  host. With no allowlist configured, enforce blocks all callbacks (fail closed).
+
+Only the callback **host** and outcome are logged — never the full callback URL,
+`signed_video_url`, or any secret.
+
 ### `PORT`
 
 Optional. Render provides this automatically.

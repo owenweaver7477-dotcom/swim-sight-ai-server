@@ -25,6 +25,12 @@ from app.report_outputs import (
     build_report_output_plan,
     filter_findings_for_outputs,
 )
+from app.worker_auth import (
+    inbound_auth_mode,
+    inbound_secret_configured,
+    verify_inbound_secret,
+)
+from app.callback_safety import callback_host_mode, is_callback_allowed
 
 
 # ─────────────────────────────────────────────────────────────
@@ -280,6 +286,81 @@ def _worker_secret_valid(value: Optional[str]) -> bool:
     return bool(expected and value and hmac.compare_digest(expected, value))
 
 
+def _apply_inbound_auth(provided_secret: Optional[str], video_upload_id: Optional[str]) -> None:
+    """Optional inbound auth for /process-video. Default OFF (no-op).
+
+    off     -> no check (current behaviour).
+    monitor -> log the outcome, still accept.
+    enforce -> reject missing/invalid with 401; if AI_INBOUND_SECRET is not
+               configured, fail closed (401).
+
+    Never logs the provided or configured secret value -- only an outcome code.
+    """
+    mode = inbound_auth_mode()
+    if mode == "off":
+        return
+
+    configured = inbound_secret_configured()
+    outcome = verify_inbound_secret(provided_secret)
+    tag = video_upload_id or "unknown-video"
+
+    if mode == "enforce":
+        if not configured:
+            logger.error(
+                "[%s] Inbound auth enforce requested but AI_INBOUND_SECRET is not set; failing closed",
+                tag,
+            )
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        if outcome != "ok":
+            logger.warning("[%s] Inbound auth rejected: outcome=%s", tag, outcome)
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return
+
+    # monitor
+    logger.info(
+        "[%s] Inbound auth monitor: outcome=%s secret_configured=%s",
+        tag,
+        outcome,
+        configured,
+    )
+
+
+def _guard_callback_host(callback_url: str, job_id: str) -> bool:
+    """Decide whether the outbound callback may be sent to callback_url.
+
+    Returns True to proceed with send. In 'enforce' a non-allowlisted host is
+    blocked (returns False) BEFORE send_callback, so the webhook secret is never
+    delivered to an unapproved host. In 'monitor' the callback still sends, but a
+    would-block is logged. Logs host + outcome only -- never the full URL or any
+    secret.
+    """
+    allowed, host, reason = is_callback_allowed(callback_url)
+    mode = callback_host_mode()
+    safe_host = host or "unknown"
+
+    if allowed:
+        if mode == "monitor":
+            logger.info("[job=%s] Callback host allowed (monitor): host=%s", job_id, safe_host)
+        return True
+
+    if mode == "enforce":
+        logger.error(
+            "[job=%s] Callback blocked (enforce): host=%s reason=%s",
+            job_id,
+            safe_host,
+            reason,
+        )
+        return False
+
+    logger.warning(
+        "[job=%s] Callback host would be blocked (monitor): host=%s reason=%s",
+        job_id,
+        safe_host,
+        reason,
+    )
+    return True
+
+
 @app.post("/jobs/{job_id}/cancel", status_code=status.HTTP_200_OK)
 async def cancel_job(
     job_id: str,
@@ -331,6 +412,7 @@ async def cancel_job(
 async def process_video(
     request: VideoProcessingRequest,
     background_tasks: BackgroundTasks,
+    x_ai_inbound_secret: Optional[str] = Header(default=None),
 ):
     """
     Vercel calls this endpoint from /api/ai/trigger.
@@ -338,6 +420,10 @@ async def process_video(
     This endpoint must accept quickly so Vercel does not time out.
     Heavy processing happens in the background.
     """
+    # Optional inbound authentication. Default OFF: no-op unless AI_INBOUND_AUTH_MODE
+    # is set to monitor/enforce. Runs before request validation and dispatch.
+    _apply_inbound_auth(x_ai_inbound_secret, request.video_upload_id)
+
     if not request.video_upload_id:
         raise HTTPException(status_code=400, detail="Missing video_upload_id")
 
@@ -904,7 +990,10 @@ async def _run_analysis_pipeline(
 
         ensure_job_active(job_id)
         from app.callback_client import send_callback
-        callback_ok = await send_callback(request.callback_url, analysis_payload)
+        if _guard_callback_host(request.callback_url, job_id):
+            callback_ok = await send_callback(request.callback_url, analysis_payload)
+        else:
+            callback_ok = False
 
         final_status = (
             "completed"
@@ -1047,6 +1136,8 @@ async def send_failure_result(
     if not failure_payload_is_safe(failure_payload):
         logger.error("[job=%s] Unsafe failure callback blocked", job_id)
         callback_ok = False
+    elif not _guard_callback_host(request.callback_url, job_id):
+        callback_ok = False
     else:
         from app.callback_client import send_callback
         callback_ok = await send_callback(request.callback_url, failure_payload)
@@ -1156,7 +1247,10 @@ async def send_manual_review_result(
     payload = attach_report_output_metadata(payload, build_report_output_plan(request))
 
     from app.callback_client import send_callback
-    callback_ok = await send_callback(request.callback_url, payload)
+    if _guard_callback_host(request.callback_url, job_id):
+        callback_ok = await send_callback(request.callback_url, payload)
+    else:
+        callback_ok = False
 
     update_job(
         job_id=job_id,

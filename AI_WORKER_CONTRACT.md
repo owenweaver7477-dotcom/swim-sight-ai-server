@@ -188,6 +188,42 @@ Unsafe logs include:
 - private storage paths
 - auth tokens
 
+## Inbound Request Authentication (optional, default off)
+
+`POST /process-video` supports an optional inbound shared secret so only the app
+can submit jobs. It is **default off** and changes no behaviour until configured.
+
+- Secret env var: `AI_INBOUND_SECRET` (app → worker). Separate from
+  `AI_WEBHOOK_SECRET` (worker → app) so a leak of one does not compromise the
+  other, and they rotate independently.
+- Header: `x-ai-inbound-secret`, compared in constant time.
+- Mode env var: `AI_INBOUND_AUTH_MODE` = `off` (default) | `monitor` | `enforce`.
+  - `off`: accept without checking (current behaviour).
+  - `monitor`: check and log the outcome (`ok`/`missing`/`invalid`), still accept.
+  - `enforce`: reject missing/invalid with `401`; fail closed (401) if
+    `AI_INBOUND_SECRET` is unset.
+
+The provided/configured secret values are never logged or echoed — only an
+outcome code. `/jobs/{job_id}/cancel` continues to use its existing
+`x-ai-worker-secret` check and is unchanged.
+
+## Callback Host Safety (optional, default monitor)
+
+Before sending a callback, the worker can check that `callback_url` targets an
+approved host, so the outbound webhook secret is never delivered to an
+attacker-controlled URL.
+
+- Allowlist env var: `AI_CALLBACK_ALLOWED_HOSTS` (comma-separated exact hosts).
+- Mode env var: `AI_CALLBACK_HOST_MODE` = `monitor` (default) | `enforce`.
+- Rules: require `https` and an **exact** host match (no suffix/wildcard).
+  - `monitor`: still sends as today; logs whether the host would be allowed.
+  - `enforce`: a non-allowlisted host is blocked **before** `send_callback`; with
+    no allowlist configured, all callbacks are blocked (fail closed).
+
+Only the callback host and a short outcome code are logged — never the full
+callback URL (which may carry query parameters), `signed_video_url`, or secrets.
+This does not change the callback payload shape.
+
 ## Adaptive Processing Tiers
 
 The worker inspects video metadata before heavy processing and selects one of:
