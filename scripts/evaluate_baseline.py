@@ -11,6 +11,11 @@ sys.path.insert(0, str(ROOT))
 
 from app.pose_estimator import run_pose_estimation  # noqa: E402
 from app.pose_postprocess import pose_smoothing_enabled, smooth_pose_results  # noqa: E402
+from app.stroke_cycles import (  # noqa: E402
+    analyze_stroke_cycles,
+    phase_analysis_enabled,
+    sanitized_cycle_summary,
+)
 from app.swim_analyzer import AI_ENGINE_VERSION, analyze_pose_data  # noqa: E402
 from app.video_processor import extract_frames  # noqa: E402
 
@@ -80,6 +85,27 @@ def evaluate_video(video_path: Path, stroke: str, camera_angle: str) -> Dict[str
         *(temporal_metrics.get("quality_flags") or []),
     ]))
 
+    # PHASE_ANALYSIS evaluation only: compute the same sanitized stroke-cycle
+    # summary the worker would attach to processing_telemetry, using the shared
+    # helpers. Read-only measurement — does NOT touch main.py or the runtime
+    # callback, and the summary is already sanitized (no landmarks/URLs/secrets).
+    stroke_cycles_summary = None
+    if phase_analysis_enabled():
+        try:
+            cycle_result = analyze_stroke_cycles(
+                pose_results,
+                float(metadata.get("fps") or 30.0),
+                stroke,
+            )
+            stroke_cycles_summary = sanitized_cycle_summary(cycle_result)
+        except Exception:
+            stroke_cycles_summary = {
+                "enabled": True,
+                "status": "error",
+                "basis": "2d_heuristic",
+                "public_safe": False,
+            }
+
     return {
         "engine": AI_ENGINE_VERSION,
         "video": video_path.name,
@@ -126,6 +152,7 @@ def evaluate_video(video_path: Path, stroke: str, camera_angle: str) -> Dict[str
         "fallback_triggered": fallback_triggered,
         "quality_flags": quality_flags,
         "temporal_metrics": temporal_metrics,
+        "stroke_cycles": stroke_cycles_summary,
         "processing_seconds": round(time.perf_counter() - started, 2),
         "notes": [],
     }

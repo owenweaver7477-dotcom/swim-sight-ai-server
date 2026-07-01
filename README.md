@@ -201,3 +201,40 @@ See `AI_WORKER_CONTRACT.md` for the frozen Phase 15B request, response, callback
 Example payloads live in `fixtures/`.
 
 See `BASELINE_EVALUATION.md` for Phase 15C fixture validation, endpoint contract tests, and local sample-clip baseline evaluation commands.
+
+## Validation Harness (before enabling any flag)
+
+Default-off AI flags must be validated on local, permissioned clips before they
+are enabled. All commands read clips from `samples/videos/` and never commit
+real footage.
+
+```bash
+# 1) Baseline metrics per clip (real pipeline)
+python3 scripts/evaluate_baseline.py --stroke Freestyle --camera-angle Side
+
+# 2) Compare flag-off vs flag-on across variants (incl. PHASE_ANALYSIS and
+#    EXTENDED_STROKE_FINDINGS). Writes a comparison JSON to baseline_reports/.
+python3 scripts/compare_upgrade_flags.py --stroke Freestyle --camera-angle Side
+
+# 3) Turn a comparison JSON into a footage-safe verdict report (per flag, per
+#    stroke). Attaches coach labels from samples/labels.local.json if present.
+python3 scripts/build_validation_report.py \
+  --comparison-file baseline_reports/upgrade_comparison_YYYYMMDD_HHMMSS.json
+```
+
+- `PHASE_ANALYSIS` is evaluated by `evaluate_baseline.py` computing the same
+  **sanitized** stroke-cycle summary + estimated rate the worker would attach
+  (read-only; `main.py` and the callback are untouched).
+- `EXTENDED_STROKE_FINDINGS` is compared through the normal analysis path — the
+  variant's new backstroke/butterfly fault tags show up as `new_fault_tags`.
+- Coach labels (`samples/labels.local.json`, schema in
+  `fixtures/labelled_clip_manifest.example.json`) may include optional
+  `expected_cycle_status`, `coach_counted_cycles` / `counted_over_seconds` or
+  `expected_cycle_rate_per_min` / `expected_stroke_rate_spm`, and
+  `stroke_rate_tolerance_percent`.
+- Verdicts are `PASS` / `NEEDS_REVIEW` / `FAIL`. **Keep every flag off until it
+  passes.** Reports contain only metrics, fault tags, clip filenames, and stroke
+  labels — never landmarks, frames, signed URLs, or secrets.
+- **Starts, turns, and underwater remain excluded from AI validation** — the
+  worker has no analysis path for them; the harness only evaluates the four
+  strokes.

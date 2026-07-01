@@ -1,4 +1,5 @@
 {
+  "_note": "Example only. Copy to samples/labels.local.json, reference local clips, and do not commit athlete data. All cycle/rate fields below are OPTIONAL.",
   "clips": [
     {
       "file": "example-breaststroke-side.mp4",
@@ -11,7 +12,13 @@
       "forbidden_fault_tags": [
         "dropped_elbow_catch"
       ],
-      "coach_notes": "Example only. Replace with locally labelled footage and do not commit athlete data."
+      "expected_cycle_status": "completed",
+      "coach_counted_cycles": 6,
+      "counted_over_seconds": 6,
+      "expected_cycle_rate_per_min": 60,
+      "expected_stroke_rate_spm": 60,
+      "stroke_rate_tolerance_percent": 15,
+      "coach_notes": "Example only. Replace with locally labelled footage and do not commit athlete data. Cycle/rate fields are optional and used only by the validation report (PHASE_ANALYSIS)."
     }
   ]
 }

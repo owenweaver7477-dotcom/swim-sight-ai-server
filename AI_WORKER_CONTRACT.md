@@ -418,7 +418,12 @@ The block never contains swimmer height, mass, or any identifying profile value.
 
 These environment flags gate optional worker upgrades. With none set, the worker
 behaves exactly as `pose-mvp-0.5` did. Enable one at a time and compare against
-the baseline harness (`scripts/evaluate_baseline.py`).
+the baseline harness: `scripts/evaluate_baseline.py`, then
+`scripts/compare_upgrade_flags.py` (includes `PHASE_ANALYSIS` and
+`EXTENDED_STROKE_FINDINGS` variants), then `scripts/build_validation_report.py`
+for a footage-safe `PASS`/`NEEDS_REVIEW`/`FAIL` verdict per flag and stroke. A
+flag stays off until it passes. Starts/turns/underwater are excluded from AI
+validation (no analysis path).
 
 | Env var | Default | Effect |
 | --- | --- | --- |

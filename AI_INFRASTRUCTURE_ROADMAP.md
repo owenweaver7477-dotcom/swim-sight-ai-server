@@ -251,6 +251,12 @@ The following must remain internal until separately validated and approved:
    processing time with a qualified coach.
 7. Enable one AI quality flag in staging only.
 8. Repeat the same clips and compare with the untouched baseline.
+   - `compare_upgrade_flags.py` now includes `PHASE_ANALYSIS` and
+     `EXTENDED_STROKE_FINDINGS` variants.
+   - `build_validation_report.py` turns a comparison into a footage-safe
+     `PASS`/`NEEDS_REVIEW`/`FAIL` verdict per flag and per stroke (finding/score/
+     fallback/detection deltas, stroke-cycle status, and estimated-rate accuracy
+     vs a coach-counted rate). Keep a flag off until it passes.
 9. Keep only flags that produce a defensible improvement.
 10. Test Redis durability separately using a real private Redis instance and a
     deliberate worker restart.

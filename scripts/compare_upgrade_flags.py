@@ -23,6 +23,8 @@ FLAG_NAMES = (
     "ROBUST_FINDINGS",
     "SEQUENTIAL_FRAME_READ",
     "ENABLE_ESTIMATED_DRAG",
+    "PHASE_ANALYSIS",
+    "EXTENDED_STROKE_FINDINGS",
 )
 
 
@@ -34,6 +36,8 @@ def flag_set(**overrides: str) -> Dict[str, str]:
         "ROBUST_FINDINGS": "false",
         "SEQUENTIAL_FRAME_READ": "false",
         "ENABLE_ESTIMATED_DRAG": "false",
+        "PHASE_ANALYSIS": "false",
+        "EXTENDED_STROKE_FINDINGS": "false",
     }
     flags.update(overrides)
     return flags
@@ -45,6 +49,8 @@ VARIANTS = (
     ("pose_smoothing", flag_set(ENABLE_POSE_SMOOTHING="true")),
     ("model_complexity_1", flag_set(POSE_MODEL_COMPLEXITY="1")),
     ("robust_findings", flag_set(ROBUST_FINDINGS="true")),
+    ("phase_analysis", flag_set(PHASE_ANALYSIS="true")),
+    ("extended_stroke_findings", flag_set(EXTENDED_STROKE_FINDINGS="true")),
     ("sequential_frame_read", flag_set(SEQUENTIAL_FRAME_READ="true")),
     (
         "all_safe_except_estimated_drag",
@@ -137,6 +143,9 @@ def run_variant(
         "average_keypoints": raw.get("detected_keypoints_average"),
         "fallback_triggered": raw.get("fallback_triggered"),
         "finding_count": raw.get("finding_count"),
+        "finding_fault_tags": raw.get("finding_fault_tags") or [],
+        "overall_score": raw.get("overall_score"),
+        "stroke_cycles": raw.get("stroke_cycles"),
         "quality_flags": raw.get("quality_flags") or [],
         "processing_tier": raw.get("processing_tier"),
         "analysis_mode": raw.get("analysis_mode"),
