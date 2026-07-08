@@ -62,8 +62,10 @@ async def download_video(video_upload_id: str, signed_url: str) -> DownloadResul
     """
     Download private signed video URL to a temporary file.
 
-    Does not log the signed URL or token.
+    Does not log the signed URL or token. Every failure branch deletes the
+    temporary file it created so failed downloads cannot leak orphan .mp4s.
     """
+    path: Optional[str] = None
     try:
         logger.info(f"[{video_upload_id}] Downloading private video for AI processing")
 
@@ -79,6 +81,7 @@ async def download_video(video_upload_id: str, signed_url: str) -> DownloadResul
                         logger.error(
                             f"[{video_upload_id}] Download failed: HTTP {response.status_code}"
                         )
+                        cleanup_temp_file(path)
                         return DownloadResult(
                             failed_reason=f"download_http_{response.status_code}",
                             quality_flags=["signed_url_download_failed"],
@@ -118,6 +121,8 @@ async def download_video(video_upload_id: str, signed_url: str) -> DownloadResul
             video_upload_id,
             type(error).__name__,
         )
+        if path:
+            cleanup_temp_file(path)
         return DownloadResult(
             failed_reason="download_error",
             quality_flags=["signed_url_download_failed"],
@@ -531,4 +536,5 @@ def cleanup_temp_file(path: str):
             os.remove(path)
             logger.info("Temporary video deleted")
     except Exception as e:
-        logger.warning(f"Could not remove temp file: {e}")
+        # OSError text can embed the private temp path; log the type only.
+        logger.warning("Could not remove temp file: error_type=%s", type(e).__name__)

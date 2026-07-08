@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 from typing import Any, Dict, Optional
@@ -9,6 +10,11 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 CALLBACK_TIMEOUT_SECONDS = 30.0
+# One transient Vercel blip must not lose a finished analysis: retry the
+# callback a small number of times with short backoff. 5xx, timeouts, and
+# network errors are retried; 4xx responses are not (they will not heal).
+CALLBACK_MAX_ATTEMPTS = 3
+CALLBACK_RETRY_BACKOFF_SECONDS = (1.0, 3.0)
 
 
 def _safe_payload_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,35 +63,59 @@ async def send_callback(
     safe_summary = _safe_payload_summary(payload)
     logger.info(f"Sending AI callback: {safe_summary}")
 
-    try:
-        async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                callback_url,
-                json=payload,
-                headers=headers,
+    for attempt in range(1, CALLBACK_MAX_ATTEMPTS + 1):
+        retryable = False
+        try:
+            async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    callback_url,
+                    json=payload,
+                    headers=headers,
+                )
+
+            if 200 <= response.status_code < 300:
+                logger.info(
+                    f"Callback accepted: HTTP {response.status_code}, "
+                    f"job_id={payload.get('job_id')}, video_upload_id={payload.get('video_upload_id')}, "
+                    f"attempt={attempt}"
+                )
+                return True
+
+            retryable = response.status_code >= 500
+            logger.error(
+                f"Callback rejected: HTTP {response.status_code}, attempt={attempt}, "
+                f"body={response.text[:500]}, summary={safe_summary}"
             )
 
-        if 200 <= response.status_code < 300:
-            logger.info(
-                f"Callback accepted: HTTP {response.status_code}, "
-                f"job_id={payload.get('job_id')}, video_upload_id={payload.get('video_upload_id')}"
+        except httpx.TimeoutException:
+            retryable = True
+            logger.error(
+                f"Callback timed out after {CALLBACK_TIMEOUT_SECONDS}s "
+                f"(attempt {attempt}): {safe_summary}"
             )
-            return True
 
-        logger.error(
-            f"Callback rejected: HTTP {response.status_code}, "
-            f"body={response.text[:500]}, summary={safe_summary}"
+        except Exception as error:
+            retryable = True
+            logger.error(
+                "Callback failed safely: error_type=%s, attempt=%s, summary=%s",
+                type(error).__name__,
+                attempt,
+                safe_summary,
+            )
+
+        if not retryable or attempt >= CALLBACK_MAX_ATTEMPTS:
+            return False
+
+        backoff = CALLBACK_RETRY_BACKOFF_SECONDS[
+            min(attempt - 1, len(CALLBACK_RETRY_BACKOFF_SECONDS) - 1)
+        ]
+        logger.info(
+            "Retrying AI callback in %ss (attempt %s/%s): job_id=%s",
+            backoff,
+            attempt + 1,
+            CALLBACK_MAX_ATTEMPTS,
+            payload.get("job_id"),
         )
-        return False
+        await asyncio.sleep(backoff)
 
-    except httpx.TimeoutException:
-        logger.error(f"Callback timed out after {CALLBACK_TIMEOUT_SECONDS}s: {safe_summary}")
-        return False
-
-    except Exception as error:
-        logger.error(
-            "Callback failed safely: error_type=%s, summary=%s",
-            type(error).__name__,
-            safe_summary,
-        )
-        return False
+    return False

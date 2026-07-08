@@ -11,7 +11,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Callable, Dict, Any, List, Optional, TypeVar
 
-from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, status
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from app.models import VideoProcessingRequest, HealthResponse
 from app.durable_queue import DurableJobQueue
@@ -66,6 +68,39 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Redacted 422 response.
+
+    FastAPI's default validation response echoes the submitted input back to
+    the caller — for a missing required field that means the WHOLE request
+    body, including signed_video_url with its token. This handler returns only
+    field names and error types: no input echo, no pydantic messages/ctx, no
+    URLs, no secrets. The exception object itself is never logged.
+    """
+    safe_errors = []
+    for error in exc.errors():
+        location = ".".join(
+            str(part) for part in error.get("loc", []) if str(part) != "body"
+        )
+        safe_errors.append({
+            "field": location or "request",
+            "type": str(error.get("type", "invalid")),
+        })
+    logger.warning(
+        "Request validation failed: path=%s fields=%s",
+        request.url.path,
+        [item["field"] for item in safe_errors],
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Request validation failed", "errors": safe_errors},
+    )
+
+
 # ─────────────────────────────────────────────────────────────
 # Root / health
 # ─────────────────────────────────────────────────────────────
@@ -114,6 +149,19 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 DURABLE_QUEUE = DurableJobQueue()
 ACTIVE_BLOCKING_TASKS: Dict[str, asyncio.Task] = {}
 PROTECTED_TERMINAL_STATUSES = {"cancelled", "timed_out"}
+# Statuses that permit a re-submitted job_id to run a fresh full pipeline.
+# Anything NOT in this set is treated as in-flight and duplicate submissions
+# are suppressed. callback_failed is deliberately included: re-submitting is
+# the safe recovery path when a finished analysis could not be delivered.
+RESUBMIT_ALLOWED_STATUSES = {
+    "completed",
+    "manual_review_recommended",
+    "failed",
+    "error",
+    "timed_out",
+    "cancelled",
+    "callback_failed",
+}
 
 
 class JobCancelledError(RuntimeError):
@@ -523,6 +571,33 @@ async def process_video(
         raise HTTPException(status_code=400, detail="Missing callback_url")
 
     job_id = get_or_create_job_id(request)
+
+    # Duplicate-job guard (default in-memory path). If this job_id is already
+    # queued/running, do NOT dispatch a second pipeline (no duplicate download,
+    # analysis, or callback). Respond idempotently with the existing job's
+    # snapshot so an app-side retry is treated as success, not an error.
+    # Terminal jobs may be re-run (a fresh full run is the existing, safe
+    # recovery path — e.g. after callback_failed). In-memory only: a worker
+    # restart clears JOBS, so cross-restart duplicates are not caught here.
+    existing_job = JOBS.get(job_id)
+    if existing_job and existing_job.get("status") not in RESUBMIT_ALLOWED_STATUSES:
+        logger.info(
+            "[%s] Duplicate job submission suppressed: job=%s status=%s",
+            request.video_upload_id,
+            job_id,
+            existing_job.get("status"),
+        )
+        return {
+            "accepted": True,
+            "job_id": job_id,
+            "server_job_id": job_id,
+            "video_upload_id": request.video_upload_id,
+            "status": existing_job.get("status", "queued"),
+            "stage": existing_job.get("stage", "queued"),
+            "engine": AI_ENGINE_VERSION,
+            "duplicate_suppressed": True,
+        }
+
     create_job(job_id=job_id, video_upload_id=request.video_upload_id)
 
     logger.info(
@@ -871,7 +946,11 @@ async def _run_analysis_pipeline(
             if pose_smoothing_enabled():
                 pose_results = smooth_pose_results(pose_results)
         except Exception as smooth_err:
-            logger.warning(f"[{request.video_upload_id}] pose smoothing skipped: {smooth_err}")
+            logger.warning(
+                "[%s] pose smoothing skipped: error_type=%s",
+                request.video_upload_id,
+                type(smooth_err).__name__,
+            )
 
         frame_count_processed = len(pose_results)
         detected_frames = [r for r in pose_results if r.get("pose_detected")]
@@ -1080,8 +1159,12 @@ async def _run_analysis_pipeline(
                             f"confidence_low={estimated_drag['confidence_low']}"
                         )
             except Exception as drag_error:
+                # Log the error type only: ValueError messages from the drag
+                # validators can embed coach-entered height/mass values.
                 logger.warning(
-                    f"[{request.video_upload_id}] estimated_drag skipped: {drag_error}"
+                    "[%s] estimated_drag skipped: error_type=%s",
+                    request.video_upload_id,
+                    type(drag_error).__name__,
                 )
 
         analysis_payload = attach_report_output_metadata(analysis_payload, output_plan)

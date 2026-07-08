@@ -96,6 +96,15 @@ Accepted response:
 
 The endpoint must return quickly with `202 Accepted`. Heavy processing runs in the background.
 
+Duplicate submissions: if the same `job_id` is re-POSTed while that job is
+still queued/running (default in-memory path), the worker does **not** run the
+pipeline again. It responds `202` with the same accepted shape plus an additive
+`duplicate_suppressed: true` and the existing job's current `status`/`stage`.
+Jobs in a terminal state (completed, manual_review_recommended, failed,
+timed_out, cancelled, callback_failed) may be re-submitted for a fresh full
+run — re-POSTing is the recovery path after `callback_failed`. The guard is
+in-memory, so it does not persist across a worker restart.
+
 ### Structured report-output selection
 
 New app requests can name the report outputs the coach selected. The worker
@@ -309,6 +318,11 @@ If the tier is `manual_review_required`, or extraction/pose processing is not re
 ## Callback Route
 
 The worker calls the Vercel app callback URL supplied in the request.
+
+Delivery is retried up to 3 attempts with short backoff (1s, 3s) on timeouts,
+network errors, and 5xx responses; 4xx responses are not retried. If every
+attempt fails the job is marked `callback_failed` (payload shape unchanged) and
+the app can recover by re-submitting the same `job_id`.
 
 Required security header:
 
